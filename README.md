@@ -1,3 +1,11 @@
+
+Local deployement
+-----------------
+
+```bash
+docker run -dit --name drawio -p 80:80 registry.flhar.ovh/draw.io
+```
+
 About
 -----
 [draw.io](https://www.draw.io) is an online diagramming web site that delivers the source in this project.
