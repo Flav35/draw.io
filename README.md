@@ -3,7 +3,7 @@ Local deployement
 -----------------
 
 ```bash
-docker run -dit --name drawio -p 80:80 registry.flhar.ovh/draw.io
+docker run -d --name drawio -p 8080:80 fhardy/draw.io
 ```
 
 About
