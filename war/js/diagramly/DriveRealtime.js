@@ -38,11 +38,11 @@ function DriveRealtime(file, doc)
 	{
 		var prevValue = this.ui.drive.enableThumbnails;
 		this.ui.drive.enableThumbnails = this.ui.editor.autosave;
-		this.ui.editor.setStatus(mxResources.get('saving') + '...');
+		this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('saving')) + '...');
 		
 		this.file.save(true, mxUtils.bind(this, function()
 		{
-			this.ui.editor.setStatus(mxResources.get('allChangesSaved'));
+			this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('allChangesSaved')));
 		}));
 		
 		this.ui.drive.enableThumbnails = prevValue;
@@ -205,7 +205,7 @@ DriveRealtime.prototype.start = function()
 				var img = new Image();
 				
 				// Timestamp is added to bypass client-side cache
-				img.src = 'images/log.png?converted=oldrt&v=' +
+				img.src = 'https://log.draw.io/log?severity=CONFIG&msg=converted-oldrt&v=' +
 					encodeURIComponent(EditorUi.VERSION) + '&ts=' + new Date().getTime();
 	    	}
 	    	catch (e)
@@ -228,6 +228,8 @@ DriveRealtime.prototype.start = function()
 				
 				if (this.file.isEditable())
 				{
+					diagramMap.set('id', page.getId());
+					
 					// Read or create name for page
 					if (page.getName() != '')
 					{
@@ -244,13 +246,16 @@ DriveRealtime.prototype.start = function()
 				page.mapping.init();
 			}
 		}
-		else if (urlParams['pages'] != '1')
+		else if (urlParams['pages'] == '0')
 		{
 			this.diagramMap = this.rtModel.createMap();
 			this.diagrams.push(this.diagramMap);
 			// Dummy node, should be XML node if used
 			this.page = new DiagramPage(document.createElement('diagram'));
 			this.page.mapping = new RealtimeMapping(this, this.diagramMap, this.page);
+			this.diagramMap.set('name', mxResources.get('pageWithNumber', [1]));
+			this.diagramMap.set('id', this.page.getId());
+			this.page.setName(this.diagramMap.get('name'));
 			this.page.mapping.init();
 		}
 		else
@@ -268,6 +273,7 @@ DriveRealtime.prototype.start = function()
 			if (this.file.isEditable() && !page.mapping.diagramMap.has('name'))
 			{
 				page.mapping.diagramMap.set('name', mxResources.get('pageWithNumber', [1]));
+				page.mapping.diagramMap.set('id', page.getId());
 			}
 			
 			page.setName(page.mapping.diagramMap.get('name') || mxResources.get('pageWithNumber', [1]));
@@ -277,7 +283,7 @@ DriveRealtime.prototype.start = function()
 		
 		forceSave = true;
 	}
-	else if (this.diagrams.length < 2 && urlParams['pages'] != '1')
+	else if (this.diagrams.length < 2 && urlParams['pages'] == '0')
 	{
 		this.ui.fileNode = null;
 		this.ui.pages = null;
@@ -292,9 +298,23 @@ DriveRealtime.prototype.start = function()
 			this.diagramMap = this.diagrams.get(0);
 		}
 		
-		// Dummy node, should be XML node if used
-		this.page = new DiagramPage(document.createElement('diagram'));
+		var node = document.createElement('diagram');
+		
+		if (this.diagramMap.has('id'))
+		{
+			node.setAttribute('id', this.diagramMap.get('id'));
+		}
+		
+		this.page = new DiagramPage(node);
 		this.page.mapping = new RealtimeMapping(this, this.diagramMap, this.page);
+		
+		if (!this.diagramMap.has('name'))
+		{
+			this.diagramMap.set('name', mxResources.get('pageWithNumber', [1]));
+		}
+		
+		this.page.setName(this.page.mapping.diagramMap.get('name'));
+		this.diagramMap.set('id', this.page.getId());
 		
 		// Avoids scroll offset when switching page
 		this.page.mapping.init();
@@ -314,15 +334,29 @@ DriveRealtime.prototype.start = function()
 		
 		for (var i = 0; i < this.diagrams.length; i++)
 		{
-			var page = new DiagramPage(this.ui.fileNode.ownerDocument.createElement('diagram'));
-			page.mapping = new RealtimeMapping(this, this.diagrams.get(i), page);
+			var node = this.ui.fileNode.ownerDocument.createElement('diagram');
+			var diagramMap = this.diagrams.get(i);
 			
-			if (this.file.isEditable() && !page.mapping.diagramMap.has('name'))
+			if (diagramMap.has('id'))
 			{
-				page.mapping.diagramMap.set('name', mxResources.get('pageWithNumber', [i + 1]));
+				node.setAttribute('id', diagramMap.get('id'));
 			}
 			
-			page.setName(page.mapping.diagramMap.get('name') || mxResources.get('pageWithNumber', [i + 1]));
+			var page = new DiagramPage(node);
+			page.mapping = new RealtimeMapping(this, diagramMap, page);
+			
+			if (this.file.isEditable() && !diagramMap.has('name'))
+			{
+				diagramMap.set('name', mxResources.get('pageWithNumber', [i + 1]));
+			}
+			
+			page.setName(diagramMap.get('name') || mxResources.get('pageWithNumber', [i + 1]));
+			
+			if (this.file.isEditable() && !diagramMap.has('id'))
+			{
+				diagramMap.set('id', page.getId());
+			}
+			
 			this.ui.pages.push(page);
 		}
 
@@ -372,7 +406,7 @@ DriveRealtime.prototype.start = function()
 			}
 			else
 			{
-				this.ui.editor.setStatus(mxResources.get('allChangesSaved'));
+				this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('allChangesSaved')));
 			}
 			
 			this.saving = false;
@@ -383,6 +417,28 @@ DriveRealtime.prototype.start = function()
 			{
 				window.clearTimeout(this.isAliveThread);
 				this.isAliveThread = null;
+			}
+		}
+		
+		if (this.file.isEditable())
+		{
+			var avail = 10485760 - this.rtModel.bytesUsed;
+			
+			if (avail > 0 && avail < 500000 && !this.sizeLimitWarningShown)
+			{
+				// Shows warning just once
+				this.sizeLimitWarningShown = true;
+				
+				this.ui.showError(mxResources.get('warning'), mxResources.get('fileNearlyFullSeeFaq'),
+					mxResources.get('close'), mxUtils.bind(this, function()
+					{
+						// Hides the dialog
+					}), null, mxResources.get('show'), mxUtils.bind(this, function()
+					{
+						// Show FAQ entry
+						window.open('https://desk.draw.io/support/solutions/articles/16000041695');
+					})
+				);
 			}
 		}
 	}));
@@ -398,7 +454,7 @@ DriveRealtime.prototype.start = function()
 	// Updates backup and preview
 	if (forceSave)
 	{
-		this.ui.editor.setStatus(mxResources.get('saving') + '...');
+		this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('saving')) + '...');
 		this.file.save(false, initialized, initialized);
 	}
 	else
@@ -425,7 +481,7 @@ DriveRealtime.prototype.start = function()
  */
 DriveRealtime.prototype.triggerAutosave = function()
 {
-	this.ui.editor.setStatus(mxResources.get('updatingPreview'));
+	this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('updatingPreview')));
 	
 	this.file.autosave(this.realtimeAutosaveDelay, this.realtimeMaxAutosaveDelay, mxUtils.bind(this, function(resp)
 	{					
@@ -435,12 +491,12 @@ DriveRealtime.prototype.triggerAutosave = function()
 		// Does not update status if another autosave was scheduled
 		if (this.ui.getCurrentFile() == this.file && !this.saving)
 		{
-			this.ui.editor.setStatus(mxResources.get('allChangesSaved'));
+			this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('allChangesSaved')));
 		}
 	}),
 	mxUtils.bind(this, function(resp)
 	{
-		this.ui.editor.setStatus(mxResources.get('errorUpdatingPreview'));
+		this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('errorUpdatingPreview')));
 		
 		// Handles error where mime type cannot be overridden because it has been changed by another app and no
 		// new revision was created. This happens eg. if draw.io pro overwrites the mime type and adds a new realtime
@@ -460,7 +516,7 @@ DriveRealtime.prototype.triggerAutosave = function()
  */
 DriveRealtime.prototype.triggerAutosave = function()
 {
-	this.ui.editor.setStatus(mxResources.get('updatingPreview'));
+	this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('updatingPreview')));
 	
 	this.file.autosave(this.realtimeAutosaveDelay, this.realtimeMaxAutosaveDelay, mxUtils.bind(this, function(resp)
 	{
@@ -470,12 +526,12 @@ DriveRealtime.prototype.triggerAutosave = function()
 		// Does not update status if another autosave was scheduled
 		if (this.ui.getCurrentFile() == this.file && !this.saving)
 		{
-			this.ui.editor.setStatus(mxResources.get('allChangesSaved'));
+			this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('allChangesSaved')));
 		}
 	}),
 	mxUtils.bind(this, function(resp)
 	{
-		this.ui.editor.setStatus(mxResources.get('errorUpdatingPreview'));
+		this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('errorUpdatingPreview')));
 		
 		// Handles error where mime type cannot be overridden because it has been changed by another app and no
 		// new revision was created. This happens eg. if draw.io pro overwrites the mime type and adds a new realtime
@@ -505,7 +561,7 @@ DriveRealtime.prototype.installReadOnlyListener = function()
 			if (!this.file.isEditable())
 			{
 				this.ui.editor.graph.reset();
-				this.ui.editor.setStatus(mxResources.get('readOnly'));
+				this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('readOnly')));
 			}
 			else
 			{
@@ -614,6 +670,26 @@ DriveRealtime.prototype.installUiChangeListeners = function()
 	});
 	
 	this.ui.addListener('foldingEnabledChanged', this.foldingEnabledListener);
+		
+	this.graph.addListener('shadowVisibleChanged', this.shadowVisibleListener);
+	
+	this.pageVisibleListener = mxUtils.bind(this, function(sender, evt)
+	{
+		if (!this.ignorePageVisibleChanged)
+		{
+			try
+			{
+				this.setFileModified();
+				this.getDiagramMap().set('pageVisible', (this.graph.pageVisible) ? '1' : '0');
+			}
+			catch (e)
+			{
+				this.ui.handleError(e);
+			}
+		}
+	});
+	
+	this.ui.addListener('pageViewChanged', this.pageVisibleListener);
 	
 	this.backgroundImageListener = mxUtils.bind(this, function(sender, evt)
 	{
@@ -753,8 +829,8 @@ DriveRealtime.prototype.updateStatus = function()
 				str = mxResources.get('lessThanAMinute');
 			}
 			
-			this.ui.editor.setStatus(mxResources.get('lastChange', [str]) +
-				(this.file.isEditable() ? '' : ' (' + mxResources.get('readOnly') + ')'));
+			this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('lastChange', [str])) +
+				(this.file.isEditable() ? '' : ' (' + mxUtils.htmlEntities(mxResources.get('readOnly')) + ')'));
 		}
 	}
 };
@@ -808,24 +884,8 @@ DriveRealtime.prototype.installPageSelectListener = function()
 		// Applies view state from realtime model without firing events
 		if (page.viewState == null)
 		{
-			// Resets part of the view that is in view state but not in realtime model
-			// via activate and not in setViewState (if state is null)
-			var graph = this.ui.editor.graph;
-			graph.view.scale = 1;
-			graph.gridEnabled = !this.ui.editor.chromeless || urlParams['grid'] == '1';
-			graph.gridSize = mxGraph.prototype.gridSize;
-			graph.pageScale = mxGraph.prototype.pageScale;
-			graph.pageVisible = this.ui.editor.graph.defaultPageVisible;
-			graph.scrollbars = this.ui.editor.graph.defaultScrollbars;
-			graph.graphHandler.guidesEnabled = true;
-			graph.defaultParent = null;
-			graph.setTooltips(true);
-			graph.setConnectable(true);
-			graph.setTooltips(true);
-			
-			// Actives from realtime without calling event listeners
+			// Activates from realtime without calling event listeners
 			page.mapping.activate(true);
-			this.ui.resetScrollbars();
 		}
 	});
 	
@@ -839,6 +899,21 @@ DriveRealtime.prototype.installPageSelectListener = function()
 			{
 				this.ignoreChange = true;
 				
+				// Switches to pages datastructure
+				if (this.ui.pages == null)
+				{
+					this.ui.fileNode = mxUtils.createXmlDocument().createElement('mxfile');
+					this.ui.pages = [];
+					
+					if (this.page != null)
+					{
+						this.ui.currentPage = this.page;
+						this.ui.pages.push(this.ui.currentPage);
+						this.diagramMap = null;
+						this.page = null;
+					}
+				}
+				
 				for (var i = 0; i < evt.values.length; i++)
 				{
 					var page = new DiagramPage(document.createElement('diagram'));
@@ -848,9 +923,17 @@ DriveRealtime.prototype.installPageSelectListener = function()
 					this.ui.pages.splice(evt.index + i, 0, page);
 					page.mapping.init();
 				}
-
-				this.ignoreChange = false;
+				
+				// Shows tab container if pages are added with pages disabled
+				if (this.ui.pages != null && this.ui.pages.length > 1 &&
+					this.ui.tabContainer != null &&
+					this.ui.tabContainer.style.height == '0px')
+				{
+					this.ui.editor.graph.view.validateBackground();
+				}
+					
 				this.ui.updateTabContainer();
+				this.ignoreChange = false;
 			}
 			else if (evt.movedFromList == this.diagrams && evt.movedFromIndex != null)
 			{
@@ -886,7 +969,13 @@ DriveRealtime.prototype.installPageSelectListener = function()
 					
 					if (index != null)
 					{
-						this.ui.removePage(this.ui.pages[index]);
+						var page = this.ui.pages[index];
+						
+						if (page != null)
+						{
+							this.ui.removePage(page);
+							page.mapping.destroy();
+						}
 					}
 				}
 				
@@ -1017,7 +1106,7 @@ DriveRealtime.prototype.setFileModified = function()
 	
 	if (!this.saving)
 	{
-		this.ui.editor.setStatus(mxResources.get('saving') + '...');
+		this.ui.editor.setStatus(mxUtils.htmlEntities(mxResources.get('saving')) + '...');
 		this.saving = true;
 	}
 };
@@ -1075,7 +1164,7 @@ DriveRealtime.prototype.installGraphModelListener = function()
 					this.isAliveThread = window.setTimeout(mxUtils.bind(this, function()
 					{
 						this.ui.editor.setStatus('<div class="geStatusAlert geBlink" style="cursor:pointer;">' +
-								mxResources.get('noResponse') + '</div>');
+							mxUtils.htmlEntities(mxResources.get('noResponse')) + '</div>');
 						
 						this.isAliveThread = window.setTimeout(mxUtils.bind(this, function()
 						{
@@ -1121,7 +1210,7 @@ DriveRealtime.prototype.timeoutError = function()
 	}), null, mxResources.get('ignore'), mxUtils.bind(this, function()
 	{
 		this.ui.editor.setStatus('<div class="geStatusAlert geBlink" style="cursor:pointer;">' +
-				mxResources.get('disconnected') + '</div>');	
+			mxUtils.htmlEntities(mxResources.get('disconnected')) + '</div>');	
 		this.realtimeHeartbeat *= 2;
 	}));
 };
@@ -1206,6 +1295,12 @@ DriveRealtime.prototype.updateCollaborators = function()
 		this.collaboratorsElement.style.verticalAlign = 'middle';
 		this.collaboratorsElement.style.backgroundPosition = '100% 60%';
 		this.collaboratorsElement.style.backgroundRepeat = 'no-repeat';
+		
+		if (screen.width <= 540)
+		{
+			this.collaboratorsElement.style.maxWidth = Math.max(10, screen.width - 500) + 'px';
+			this.collaboratorsElement.style.overflow = 'hidden';
+		}
 		
 		this.ui.toolbarContainer.appendChild(this.collaboratorsElement);
 		
@@ -1664,6 +1759,12 @@ DriveRealtime.prototype.destroy = function(unloading)
 		this.foldingEnabledListener = null;
 	}
 
+	if (this.pageVisibleListener != null)
+	{
+		this.ui.removeListener(this.pageVisibleListener);
+		this.pageVisibleListener = null;
+	}
+
 	if (this.backgroundImageListener != null)
 	{
 		this.ui.removeListener(this.backgroundImageListener);
@@ -1704,6 +1805,12 @@ DriveRealtime.prototype.destroy = function(unloading)
 	{
 		this.model.removeListener(this.graphModelChangeListener);
 		this.graphModelChangeListener = null;
+	}
+	
+	if (this.pageChangeListener != null)
+	{
+		this.ui.editor.removeListener(this.pageChangeListener);
+		this.pageChangeListener = null;
 	}
 
 	if (this.viewStateListener != null)

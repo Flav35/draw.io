@@ -1,33 +1,44 @@
+/**
+ * Copyright (c) 2006-2016, JGraph Ltd
+ * Copyright (c) 2006-2016, Gaudenz Alder
+ */
 package com.mxgraph.io.vsdx;
-
-import com.mxgraph.model.mxCell;
-import com.mxgraph.model.mxGeometry;
-import com.mxgraph.util.mxConstants;
-import com.mxgraph.util.mxPoint;
-import com.mxgraph.util.mxResources;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Hashtable;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.HashSet;
 import java.util.logging.Logger;
 import java.util.zip.Deflater;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.lang3.StringUtils;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+
+import com.mxgraph.io.mxVsdxCodec;
+import com.mxgraph.io.vsdx.theme.Color;
+import com.mxgraph.io.vsdx.theme.QuickStyleVals;
+import com.mxgraph.model.mxCell;
+import com.mxgraph.model.mxGeometry;
+import com.mxgraph.online.Utils;
+import com.mxgraph.util.mxConstants;
+import com.mxgraph.util.mxPoint;
+import com.mxgraph.util.mxResources;
+import com.mxgraph.util.mxXmlUtils;
+import com.mxgraph.view.mxCellState;
+import com.mxgraph.view.mxGraph;
+import com.mxgraph.view.mxGraphView;
 
 /**
  * This class is a wrapper for one Shape Element.<br/>
@@ -39,11 +50,13 @@ import org.w3c.dom.NodeList;
  */
 public class VsdxShape extends Shape
 {
+	private static final String ARROW_NO_FILL_MARKER = "0";
+
 	/**
 	 * Number of d.p. to round non-integers to
 	 */
 	static public int maxDp = 2;
-	
+
 	// For debugging to switch off shape matching by name
 	static public boolean USE_SHAPE_MATCH = true;
 
@@ -55,12 +68,12 @@ public class VsdxShape extends Shape
 	/**
 	 * Master Shape referenced by the shape.
 	 */
-	protected mxMasterShape masterShape = null;
+	protected Shape masterShape;
 
 	/**
 	 * Master element referenced by the shape.
 	 */
-	protected mxVsdxMaster master = null;
+	protected mxVsdxMaster master;
 
 	/**
 	 * If the shape is a sub shape, this is a reference to its root shape, otherwise null
@@ -68,72 +81,111 @@ public class VsdxShape extends Shape
 	protected VsdxShape rootShape = this;
 
 	public double parentHeight;
-	
-	/**
-	 * Stylesheet with the fill style referenced by the shape.
-	 */
-	protected mxStyleSheet fillStyle = null;
 
-	/**
-	 * Stylesheet with the line style referenced by the shape.
-	 */
-	protected mxStyleSheet lineStyle = null;
-
-	/**
-	 * Stylesheet with the text style referenced by the shape.
-	 */
-	protected mxStyleSheet textStyle = null;
-	
 	/**
 	 * The prefix of the shape name
 	 */
 	protected String shapeName = null;
-	
+
+	/**
+	 * Shape index
+	 */
+	protected int shapeIndex = 0;
+
 	/**
 	 * Whether this cell is a vertex
 	 */
 	protected boolean vertex = true;
-	
+
 	protected Map<Integer, VsdxShape> childShapes = new HashMap<Integer, VsdxShape>();
-	
+
 	protected static DocumentBuilder docBuilder = null;
-	
-	public static final Set<String> OFFSET_ARRAY = new HashSet<String>(Arrays.asList(
-			new String[] {"Organizational unit",
-			"Domain 3D"}
-	));	
+
+	public static final Set<String> OFFSET_ARRAY = new HashSet<String>(
+			Arrays.asList(new String[] { "Organizational unit", "Domain 3D" }));
 
 	public static final String stencilTemplate = "<shape h=\"htemplate\" w=\"wtemplate\" aspect=\"variable\" strokewidth=\"inherit\"><connections></connections><background></background><foreground></foreground></shape>";
-	
-	public static final float[] arrowSizes = {2, 3, 5, 7, 9, 22, 45};
-	
-	public static final Map<String, String> arrowTypes;
-	
+
+	public static final float[] arrowSizes = { 2, 3, 5, 7, 9, 22, 45 };
+
+	public static final Map<Integer, String> arrowTypes;
+
 	static
 	{
 		try
 		{
 			mxResources.add("com/mxgraph/io/vdx/resources/edgeNameU");
 			mxResources.add("com/mxgraph/io/vdx/resources/nameU");
-			
-			DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
-			docBuilder = docFactory.newDocumentBuilder();
+			docBuilder = mxXmlUtils.getDocumentBuilder();
 		}
 		catch (Exception e)
 		{
 			// todo
 		}
-		
-		arrowTypes = new HashMap<String, String>();
-		arrowTypes.put("0", null);
-		arrowTypes.put("1", mxConstants.ARROW_OPEN);
-		arrowTypes.put("4", mxConstants.ARROW_BLOCK);
-		arrowTypes.put("5", mxConstants.ARROW_CLASSIC);
-		arrowTypes.put("10", mxConstants.ARROW_OVAL);
-		arrowTypes.put("13", mxConstants.ARROW_BLOCK);
+
+		arrowTypes = new HashMap<Integer, String>();
+		arrowTypes.put(0, mxConstants.NONE);
+		arrowTypes.put(1, mxConstants.ARROW_OPEN);
+		arrowTypes.put(2, "blockThin");
+		arrowTypes.put(3, mxConstants.ARROW_OPEN);
+		arrowTypes.put(4, mxConstants.ARROW_BLOCK);
+		arrowTypes.put(5, mxConstants.ARROW_CLASSIC);
+		arrowTypes.put(10, mxConstants.ARROW_OVAL);
+		arrowTypes.put(13, mxConstants.ARROW_BLOCK);
+
+		arrowTypes.put(14, ARROW_NO_FILL_MARKER + mxConstants.ARROW_BLOCK);
+		arrowTypes.put(17, ARROW_NO_FILL_MARKER + mxConstants.ARROW_CLASSIC);
+		arrowTypes.put(20, ARROW_NO_FILL_MARKER + mxConstants.ARROW_OVAL);
+		arrowTypes.put(22, ARROW_NO_FILL_MARKER + "diamond");
+
+		arrowTypes.put(23, "dash");
+		arrowTypes.put(24, "ERone");
+		arrowTypes.put(25, "ERmandOne");
+		arrowTypes.put(27, "ERmany");
+		arrowTypes.put(28, "ERoneToMany");
+		arrowTypes.put(29, "ERzeroToMany");
+		arrowTypes.put(30, "ERzeroToOne");
+
+		//approximations
+		arrowTypes.put(6, mxConstants.ARROW_BLOCK);
+		arrowTypes.put(7, mxConstants.ARROW_OPEN);
+		arrowTypes.put(8, mxConstants.ARROW_CLASSIC);
+
+		arrowTypes.put(9, "openAsync");
+		arrowTypes.put(11, "diamond");
+
+		arrowTypes.put(12, mxConstants.ARROW_OPEN);
+
+		arrowTypes.put(15, ARROW_NO_FILL_MARKER + mxConstants.ARROW_BLOCK);
+		arrowTypes.put(16, ARROW_NO_FILL_MARKER + mxConstants.ARROW_BLOCK);
+		arrowTypes.put(18, ARROW_NO_FILL_MARKER + mxConstants.ARROW_BLOCK);
+		arrowTypes.put(19, ARROW_NO_FILL_MARKER + mxConstants.ARROW_CLASSIC);
+		arrowTypes.put(21, ARROW_NO_FILL_MARKER + "diamond");
+		arrowTypes.put(26, "ERmandOne");
+
+		arrowTypes.put(31, ARROW_NO_FILL_MARKER + mxConstants.ARROW_OVAL);
+		arrowTypes.put(32, ARROW_NO_FILL_MARKER + mxConstants.ARROW_OVAL);
+		arrowTypes.put(33, ARROW_NO_FILL_MARKER + mxConstants.ARROW_OVAL);
+		arrowTypes.put(34, ARROW_NO_FILL_MARKER + mxConstants.ARROW_OVAL);
+
+		arrowTypes.put(35, mxConstants.ARROW_OVAL);
+		arrowTypes.put(36, mxConstants.ARROW_OVAL);
+		arrowTypes.put(37, mxConstants.ARROW_OVAL);
+		arrowTypes.put(38, mxConstants.ARROW_OVAL);
+
+		arrowTypes.put(39, mxConstants.ARROW_BLOCK);
+		arrowTypes.put(40, ARROW_NO_FILL_MARKER + mxConstants.ARROW_BLOCK);
+
+		arrowTypes.put(41, ARROW_NO_FILL_MARKER + mxConstants.ARROW_OVAL);
+		arrowTypes.put(42, mxConstants.ARROW_OVAL);
+
+		arrowTypes.put(43, mxConstants.ARROW_OPEN);
+		arrowTypes.put(44, mxConstants.ARROW_OPEN);
+		arrowTypes.put(45, mxConstants.ARROW_OPEN);
 	}
 
-	private final static Logger LOGGER = Logger.getLogger(VsdxShape.class.getName());
+	private final static Logger LOGGER = Logger
+			.getLogger(VsdxShape.class.getName());
 
 	/**
 	 * Create a new instance of mxVdxShape.
@@ -141,25 +193,36 @@ public class VsdxShape extends Shape
 	 * and stylesheet.
 	 * @param shape
 	 */
-	public VsdxShape(mxVsdxPage page, Element shape, boolean vertex, Map<String, mxVsdxMaster> masters, mxVsdxMaster master, mxVsdxModel model)
+	public VsdxShape(mxVsdxPage page, Element shape, boolean vertex,
+			Map<String, mxVsdxMaster> masters, mxVsdxMaster master,
+			mxVsdxModel model)
 	{
 		super(shape, model);
-		this.master = master;
-		
-		if (master != null)
+
+		String masterId = this.getMasterId();
+		String masterShapeLocal = this.getShapeMasterId();
+
+		if (masterId != null)
+		{
+			this.master = masters.get(masterId);
+		}
+		else
+		{
+			this.master = master;
+		}
+
+		if (this.master != null)
 		{
 			// Check if the master ID corresponds to the one passed in. If it doesn't, or doesn't
 			// exist on this shape, this shape is within a group that has that master
-			String masterId = this.getMasterId();
-			String masterShapeLocal = this.getShapeMasterId();
-			
+
 			if (masterId == null && masterShapeLocal != null)
 			{
-				this.masterShape = master.getSubShape(masterShapeLocal);
+				this.masterShape = this.master.getSubShape(masterShapeLocal);
 			}
 			else
 			{
-				this.masterShape = master.getMasterShape();
+				this.masterShape = this.master.getMasterShape();
 			}
 		}
 
@@ -167,37 +230,104 @@ public class VsdxShape extends Shape
 		{
 			this.masterShape.debug = this.debug;
 		}
-		
-		this.lineStyle = model.getStylesheet(shape.getAttribute(mxVsdxConstants.LINE_STYLE));
-		this.textStyle = model.getStylesheet(shape.getAttribute(mxVsdxConstants.TEXT_STYLE));
-		
+
 		String name = getNameU();
 		int index = name.lastIndexOf(".");
-		
+
 		if (index != -1)
 		{
 			name = name.substring(0, index);
 		}
-		
+
 		this.shapeName = name;
-		
+
 		// Get sub-shapes
-		NodeList shapesList = shape.getElementsByTagName(mxVsdxConstants.SHAPES);
-		
+		NodeList shapesList = shape
+				.getElementsByTagName(mxVsdxConstants.SHAPES);
+
 		if (shapesList != null && shapesList.getLength() > 0)
 		{
 			Element shapesElement = (Element) shapesList.item(0);
-			this.childShapes = page.parseShapes(shapesElement, master, false);
+			this.childShapes = page.parseShapes(shapesElement, this.master,
+					false);
 		}
-		
+
+		double rotation = this.calcRotation();
+		this.rotation = rotation * 100 / 100;
+		this.rotation = this.rotation % 360.0;
+
+		int themeIndex = page.getCellIntValue("ThemeIndex", -100);
+
+		//sometimes theme information are at the shape level!
+		if (themeIndex == -100)
+		{
+			themeIndex = Integer.parseInt(
+					this.getValue(this.getCellElement("ThemeIndex"), "0"));
+		}
+
+		mxVsdxTheme theme = model.getThemes().get(themeIndex);
+		int variant = page.getCellIntValue("VariationColorIndex", 0);
+
+		setThemeAndVariant(theme, variant);
+
 		for (Map.Entry<Integer, VsdxShape> entry : childShapes.entrySet())
 		{
-		    entry.getValue().setRootShape(this);
+			VsdxShape childShape = entry.getValue();
+			childShape.setRootShape(this);
+
+			if (childShape.theme == null)
+			{
+				childShape.setThemeAndVariant(theme, variant);
+			}
 		}
-		
-		this.vertex = vertex;
+
+		quickStyleVals = new QuickStyleVals(
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleEffectsMatrix"), "0")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleFillColor"), "1")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleFillMatrix"), "0")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleFontColor"), "1")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleFontMatrix"), "0")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleLineColor"), "1")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleLineMatrix"), "0")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleShadowColor"), "1")),
+				Integer.parseInt(this
+						.getValue(this.getCellElement("QuickStyleType"), "0")),
+				Integer.parseInt(this.getValue(
+						this.getCellElement("QuickStyleVariation"), "0")));
+
+		//process shape geometry
+		if (masterShape != null)
+		{
+			masterShape.processGeomList(null);
+			processGeomList(masterShape.getGeomList());
+
+			//recalculate width and height using master data
+			if (this.width == 0)
+				this.width = getScreenNumericalValue(
+						getCellElement(mxVsdxConstants.WIDTH), 0);
+
+			if (this.height == 0)
+				this.height = getScreenNumericalValue(
+						getCellElement(mxVsdxConstants.HEIGHT), 0);
+		}
+		else
+		{
+			processGeomList(null);
+		}
+		//several shapes have beginX/Y and also has a fill color, thus it is better to render it as a vertex
+		//vsdx can have an edge as a group!
+		this.vertex = vertex || (childShapes != null && !childShapes.isEmpty())
+				|| (geomList != null && !geomList.isNoFill());
 	}
-	
+
 	/**
 	 * Locates the first entry for the specified attribute string in the shape hierarchy.
 	 * The order is to look locally, then delegate the request to the master shape
@@ -205,15 +335,15 @@ public class VsdxShape extends Shape
 	 * @param key The key of the shape to find
 	 * @return the Element that first resolves to that shape key or null or none is found
 	 */
-	protected Element getShapeNode(String key)
+	public Element getShapeNode(String key)
 	{
 		Element elem = this.cellElements.get(key);
-		
+
 		if (elem == null && this.masterShape != null)
 		{
-			return this.masterShape.getStyleNode(key);
+			return this.masterShape.getCellElement(key);
 		}
-		
+
 		return elem;
 	}
 
@@ -224,31 +354,57 @@ public class VsdxShape extends Shape
 	 */
 	public String getTextLabel()
 	{
-		String masterId = this.getMasterId();
-		mxMasterShape masterShape = null;
+		String hideText = this
+				.getValue(this.getCellElement(mxVsdxConstants.HIDE_TEXT), "0");
 
-		if (master != null)
+		if ("1".equals(hideText))
 		{
-			if (masterId != null)
-			{
-				masterShape = master.getMasterShape();
-			}
-			else 
-			{
-				masterShape = master.getSubShape(this.getShapeMasterId());
-			}
+			return null;
+		}
+
+		NodeList txtChildren = getTextChildren();
+
+		if (txtChildren == null && masterShape != null)
+		{
+			txtChildren = masterShape.getTextChildren();
 		}
 
 		if (this.htmlLabels)
 		{
-			mxVsdxTextParser vtp = new mxVsdxTextParser(this, masterShape, textStyle, pm);
-			//Get text with tags html
-			return vtp.getHtmlTextContent();
+			if (txtChildren != null)
+			{
+				// Collect text into same formatting paragraphs. If there's one paragraph, use the new system, otherwise
+				// leave it to the old one.
+				//				if (this.paragraphs == null)
+				//				{
+				//					initLabels(txtChildren);
+				//				}
+				//				
+				//				if (this.paragraphs.size() == 0)
+				//				{
+				//					// valid way to have an empty label override a master value "<text />"
+				//					return "";
+				//				}
+				//				else if (this.paragraphs.size() == 1)
+				//				{
+				//					return createHybridLabel(this.paragraphs.keySet().iterator().next());
+				//				}
+				//				else
+				//				{
+				//Sometimes one paragraph also contains mix of styles which are not supported by hybrid labels, so, use the old style for all html labels
+				this.styleMap.put(mxConstants.STYLE_VERTICAL_ALIGN,
+						getAlignVertical());
+				this.styleMap.put(mxConstants.STYLE_ALIGN,
+						getHorizontalAlign("0", false));
+
+				return getHtmlTextContent(txtChildren);
+				//				}
+			}
 		}
 		else
 		{
 			String text = this.getText();
-			
+
 			if (text == null && masterShape != null)
 			{
 				return masterShape.getText();
@@ -258,6 +414,244 @@ public class VsdxShape extends Shape
 				return text;
 			}
 		}
+
+		return null;
+	}
+
+	private String getIndex(Element elem)
+	{
+		String ix = elem.getAttribute("IX");
+		return ix.isEmpty()? "0" : ix;
+	}
+	
+	/**
+	 * Initialises the text labels
+	 * @param children the text Elements
+	 */
+	protected void initLabels(NodeList children)
+	{
+		// Lazy init
+		paragraphs = new LinkedHashMap<String, Paragraph>();
+		String ch = null;
+		String pg = null;
+		String fld = null;
+
+		for (int index = 0; index < children.getLength(); index++)
+		{
+			String value = null;
+			Node node = children.item(index);
+			String nodeName = node.getNodeName();
+
+			switch (nodeName)
+			{
+				case "cp":
+				{
+					Element elem = (Element) node;
+					ch = getIndex(elem);
+				}
+					break;
+				case "tp":
+				{
+					// TODO
+					Element elem = (Element) node;
+					getIndex(elem);
+				}
+					break;
+				case "pp":
+				{
+					Element elem = (Element) node;
+					pg = getIndex(elem);
+				}
+					break;
+				case "fld":
+				{
+					Element elem = (Element) node;
+					fld = getIndex(elem);
+					break;
+				}
+				case "#text":
+				{
+					value = StringUtils.chomp(node.getTextContent());
+
+					// Assumes text is always last
+					// null key is allowed
+					Paragraph para = paragraphs.get(pg);
+
+					if (para == null)
+					{
+						para = new Paragraph(value, ch, pg, fld);
+						paragraphs.put(pg, para);
+					}
+					else
+					{
+						para.addText(value, ch, fld);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * 
+	 * @param index
+	 * @return
+	 */
+	protected String createHybridLabel(String index)
+	{
+		Paragraph para = this.paragraphs.get(index);
+
+		// Paragraph
+		this.styleMap.put(mxConstants.STYLE_ALIGN,
+				getHorizontalAlign(index, false));
+		this.styleMap.put(mxConstants.STYLE_SPACING_LEFT, getIndentLeft(index));
+		this.styleMap.put(mxConstants.STYLE_SPACING_RIGHT,
+				getIndentRight(index));
+		this.styleMap.put(mxConstants.STYLE_SPACING_TOP, getSpBefore(index));
+		this.styleMap.put(mxConstants.STYLE_SPACING_BOTTOM, getSpAfter(index));
+		//this.styleMap.put("text-indent", getIndentFirst(index));
+		this.styleMap.put(mxConstants.STYLE_VERTICAL_ALIGN, getAlignVertical());
+
+		this.styleMap.put("fontColor", getTextColor(index));
+		this.styleMap.put("fontSize", this.getTextSize(index));
+		this.styleMap.put("fontFamily", getTextFont(index));
+
+		// Character
+		int fontStyle = isBold(index) ? mxConstants.FONT_BOLD : 0;
+		fontStyle |= isItalic(index) ? mxConstants.FONT_ITALIC : 0;
+		fontStyle |= isUnderline(index) ? mxConstants.FONT_UNDERLINE : 0;
+		this.styleMap.put("fontStyle", String.valueOf(fontStyle));
+
+		//Commented out as the method getTextOpacity returns value between 0 and 1 instead of 0 - 100
+		//		this.styleMap.put(mxConstants.STYLE_TEXT_OPACITY, getTextOpacity(index));
+
+		int numValues = para.numValues();
+		String result = null;
+
+		for (int i = 0; i < numValues; i++)
+		{
+			String value = para.getValue(i);
+
+			if (value.isEmpty() && this.fields != null)
+			{
+				String fieldIx = para.getField(i);
+
+				if (fieldIx != null)
+				{
+					value = this.fields.get(fieldIx);
+
+					if (value == null && masterShape != null
+							&& masterShape.fields != null)
+					{
+						value = masterShape.fields.get(fieldIx);
+					}
+				}
+			}
+
+			if (value != null)
+			{
+				result = result == null ? value : result + value;
+			}
+		}
+
+		return result;
+	}
+
+	/**
+	 * Returns the text contained in the shape formated with tags html.<br/>
+	 * @return Text content in html.
+	 */
+	public String getHtmlTextContent(NodeList txtChildren)
+	{
+		String ret = "";
+		boolean first = true;
+
+		if (txtChildren != null && txtChildren.getLength() > 0)
+		{
+			for (int index = 0; index < txtChildren.getLength(); index++)
+			{
+				Node node = txtChildren.item(index);
+
+				if (node.getNodeName().equals("cp"))
+				{
+					Element elem = (Element) node;
+					cp = getIndex(elem);
+				}
+				else if (node.getNodeName().equals("tp"))
+				{
+					Element elem = (Element) node;
+					tp = getIndex(elem);
+				}
+				else if (node.getNodeName().equals("pp"))
+				{
+					Element elem = (Element) node;
+					pp = getIndex(elem);
+
+					if (first)
+					{
+						first = false;
+					}
+					else
+					{
+						ret += "</p>";
+					}
+
+					String para = "<p>";
+					ret += getTextParagraphFormated(para);
+				}
+				else if (node.getNodeName().equals("fld"))
+				{
+					Element elem = (Element) node;
+					fld = getIndex(elem);
+
+					String text = null;
+
+					if (this.fields != null)
+					{
+						text = this.fields.get(fld);
+					}
+
+					if (text == null && masterShape != null
+							&& masterShape.fields != null)
+					{
+						text = masterShape.fields.get(fld);
+					}
+
+					if (text != null)
+						ret += processLblTxt(text);
+				}
+				else if (node.getNodeName().equals("#text"))
+				{
+					String text = node.getTextContent();
+
+					// There's a case in master shapes where the text element has the raw value "N".
+					// The source tool doesn't render this. Example is ALM_Information_flow.vdx, the two label
+					// edges in the center
+					//					if (!masterShapeOnly || !text.equals("N"))
+					//					{
+					ret += processLblTxt(text);
+					//					}
+				}
+			}
+		}
+
+		String end = first ? "" : "</p>";
+		ret += end;
+		mxVsdxUtils.surroundByTags(ret, "div");
+
+		return ret;
+	}
+
+	private String processLblTxt(String text)
+	{
+		// It's HTML text, so escape it.
+		text = mxVsdxUtils.htmlEntities(text);
+
+		text = textToList(text, pp);
+
+		text = text.replaceAll("\n", "<br/>").replaceAll(UNICODE_LINE_SEP,
+				"<br/>");
+
+		return getTextCharFormated(text);
 	}
 
 	/**
@@ -268,18 +662,18 @@ public class VsdxShape extends Shape
 	public boolean isConnectorBigNameU(String nameU)
 	{
 		return nameU.startsWith("60 degree single")
-		|| nameU.startsWith("45 degree single")
-		|| nameU.startsWith("45 degree double")
-		|| nameU.startsWith("60 degree double")
-		|| nameU.startsWith("45 degree  tail")
-		|| nameU.startsWith("60 degree  tail")
-		|| nameU.startsWith("45 degree tail")
-		|| nameU.startsWith("60 degree tail")
-		|| nameU.startsWith("Flexi-arrow 2")
-		|| nameU.startsWith("Flexi-arrow 1")
-		|| nameU.startsWith("Flexi-arrow 3")
-		|| nameU.startsWith("Double flexi-arrow")
-		|| nameU.startsWith("Fancy arrow");
+				|| nameU.startsWith("45 degree single")
+				|| nameU.startsWith("45 degree double")
+				|| nameU.startsWith("60 degree double")
+				|| nameU.startsWith("45 degree  tail")
+				|| nameU.startsWith("60 degree  tail")
+				|| nameU.startsWith("45 degree tail")
+				|| nameU.startsWith("60 degree tail")
+				|| nameU.startsWith("Flexi-arrow 2")
+				|| nameU.startsWith("Flexi-arrow 1")
+				|| nameU.startsWith("Flexi-arrow 3")
+				|| nameU.startsWith("Double flexi-arrow")
+				|| nameU.startsWith("Fancy arrow");
 	}
 
 	/**
@@ -304,44 +698,29 @@ public class VsdxShape extends Shape
 		double py = this.getPinY();
 		double lpy = this.getLocPinY();
 		double lpx = this.getLocPinX();
-		double h = 0, w = 0;
 
-		if (this.hasHeight())
-		{
-			h = this.getHeight();
-		}
-		else if (masterShape != null && masterShape.hasHeight())
-		{
-			h = masterShape.getHeight();
-		}
-		
-		if (this.hasWidth())
-		{
-			w = this.getWidth();
-		}
-		else if (masterShape != null && masterShape.hasWidth())
-		{
-			w = masterShape.getWidth();
-		}
+		double w = getScreenNumericalValue(
+				this.getShapeNode(mxVsdxConstants.WIDTH), 0);
+		double h = getScreenNumericalValue(
+				this.getShapeNode(mxVsdxConstants.HEIGHT), 0);
 
 		double x = px - lpx;
 		double y = parentHeight - ((py) + (h - lpy));
 
 		// If the location pins are not in the center of the vertex we
 		// need to translate the origin
-		if (rotation && (lpy != h/2 || lpx != w/2))
+		if (rotation && (lpy != h / 2 || lpx != w / 2))
 		{
-			double angle = Double.valueOf(this.getText(this.getStyleNode(mxVsdxConstants.ANGLE), "0"));
-			
-			if (angle != 0)
+			if (this.rotation != 0)
 			{
-				double vecX = w/2 - lpx;
-				double vecY = lpy - h/2;
-				
-			    double cos = Math.cos(angle);
-			    double sin = Math.sin(angle);
-				
-				return new mxPoint(x + vecX - (vecX * cos - vecY * sin), (vecX * sin + vecY * cos) + y -vecY);
+				double vecX = w / 2 - lpx;
+				double vecY = lpy - h / 2;
+
+				double cos = Math.cos(Math.toRadians(360 - this.rotation));
+				double sin = Math.sin(Math.toRadians(360 - this.rotation));
+
+				return new mxPoint(x + vecX - (vecX * cos - vecY * sin),
+						(vecX * sin + vecY * cos) + y - vecY);
 			}
 		}
 
@@ -357,30 +736,13 @@ public class VsdxShape extends Shape
 	 */
 	public mxPoint getDimensions()
 	{
-		double w = 0;
-		double h = 0;
+		double w = getScreenNumericalValue(
+				this.getShapeNode(mxVsdxConstants.WIDTH), 0);
+		double h = getScreenNumericalValue(
+				this.getShapeNode(mxVsdxConstants.HEIGHT), 0);
 
-		//Defines Width
-		if (this.hasWidth())
-		{
-			w = this.getWidth();
-		}
-		else if (masterShape != null && masterShape.hasWidth())
-		{
-			w = masterShape.getWidth();
-		}
-
-		//Defines Height
-		if (this.hasHeight())
-		{
-			h = this.getHeight();
-		}
-		else if (masterShape != null && masterShape.hasHeight())
-		{
-			h = masterShape.getHeight();
-		}
-
-		return new mxPoint(w, h);
+		//some shapes has zero height/width while the other dimension is non-zero. Setting it to 1 fixed it.
+		return new mxPoint(w == 0 && h > 0 ? 1 : w, h == 0 && w > 0 ? 1 : h);
 	}
 
 	/**
@@ -389,7 +751,8 @@ public class VsdxShape extends Shape
 	 */
 	public double getPinX()
 	{
-		return getScreenNumericalValue(this.getShapeNode(mxVsdxConstants.PIN_X), 0);
+		return getScreenNumericalValue(this.getShapeNode(mxVsdxConstants.PIN_X),
+				0);
 	}
 
 	/**
@@ -398,7 +761,8 @@ public class VsdxShape extends Shape
 	 */
 	public double getPinY()
 	{
-		return getScreenNumericalValue(this.getShapeNode(mxVsdxConstants.PIN_Y), 0);
+		return getScreenNumericalValue(this.getShapeNode(mxVsdxConstants.PIN_Y),
+				0);
 	}
 
 	/**
@@ -407,7 +771,8 @@ public class VsdxShape extends Shape
 	 */
 	public double getLocPinX()
 	{
-		return getScreenNumericalValue(this.getShapeNode(mxVsdxConstants.LOC_PIN_X), 0);
+		return getScreenNumericalValue(
+				this.getShapeNode(mxVsdxConstants.LOC_PIN_X), 0);
 	}
 
 	/**
@@ -416,7 +781,8 @@ public class VsdxShape extends Shape
 	 */
 	public double getLocPinY()
 	{
-		return getScreenNumericalValue(this.getShapeNode(mxVsdxConstants.LOC_PIN_Y), 0);
+		return getScreenNumericalValue(
+				this.getShapeNode(mxVsdxConstants.LOC_PIN_Y), 0);
 
 	}
 
@@ -433,7 +799,7 @@ public class VsdxShape extends Shape
 			opacity = 0;
 		}
 
-		opacity = getNumericalValue(this.getStyleNode(key), 0);
+		opacity = getValueAsDouble(this.getCellElement(key), 0);
 
 		opacity = 100 - opacity * 100;
 		opacity = Math.max(opacity, 0);
@@ -449,12 +815,45 @@ public class VsdxShape extends Shape
 	 */
 	private String getGradient()
 	{
-		String gradient = "";
-		String fillPattern = this.getText(this.getStyleNode(mxVsdxConstants.FILL_PATTERN), "0");
-
-		if (fillPattern.equals("25") || fillPattern.equals("27") || fillPattern.equals("28") || fillPattern.equals("30"))
+		String fillGradientEnabled = this.getValue(this.getCellElement(mxVsdxConstants.FILL_GRADIENT_ENABLED), "0");
+		
+		if ("1".equals(fillGradientEnabled))
 		{
-			gradient = this.getColor(this.getStyleNode(mxVsdxConstants.FILL_BKGND));
+			Section fillGradient = sections.get("FillGradient");
+			
+			if (fillGradient != null)
+			{
+				//find the last row. We approximate gradients with first and last color
+				ArrayList<Element> rows = mxVsdxUtils.getDirectChildNamedElements(fillGradient.elem, "Row");
+				
+				String color = this.getColor(fillGradient.getIndexedCell(rows.get(rows.size() - 1).getAttribute("IX"), "GradientStopColor"));
+				
+				if (color != null && !color.isEmpty()) return color;
+			}
+		}
+
+		String gradient = "";
+		String fillPattern = this.getValue(
+				this.getCellElement(mxVsdxConstants.FILL_PATTERN), "0");
+
+		//		if (fillPattern.equals("25") || fillPattern.equals("27") || fillPattern.equals("28") || fillPattern.equals("30"))
+		//approximate all gradients of vsdx with mxGraph one
+		if (Integer.parseInt(fillPattern) >= 25)
+		{
+			gradient = this
+					.getColor(this.getCellElement(mxVsdxConstants.FILL_BKGND));
+		}
+		else
+		{
+			mxVsdxTheme theme = getTheme();
+
+			if (theme != null)
+			{
+				Color gradColor = theme
+						.getFillGraientColor(getQuickStyleVals());
+				if (gradColor != null)
+					gradient = gradColor.toHexStr();
+			}
 		}
 
 		return gradient;
@@ -468,7 +867,8 @@ public class VsdxShape extends Shape
 	private String getGradientDirection()
 	{
 		String direction = "";
-		String fillPattern = this.getText(this.getStyleNode(mxVsdxConstants.FILL_PATTERN), "0");
+		String fillPattern = this.getValue(
+				this.getCellElement(mxVsdxConstants.FILL_PATTERN), "0");
 
 		if (fillPattern.equals("25"))
 		{
@@ -494,15 +894,27 @@ public class VsdxShape extends Shape
 	 * Returns the rotation of the shape.<br/>
 	 * @return Rotation of the shape in degrees.
 	 */
-	public double getRotation()
+	public double calcRotation()
 	{
-		double rotation = Double.valueOf(this.getText(this.getStyleNode(mxVsdxConstants.ANGLE), "0"));
+		double rotation = Double.valueOf(
+				this.getValue(this.getCellElement(mxVsdxConstants.ANGLE), "0"));
 
 		rotation = Math.toDegrees(rotation);
 		rotation = rotation % 360;
-		rotation = rotation * 100/100;
+		rotation = rotation * 100 / 100;
 
 		return 360 - rotation;
+	}
+
+	/**
+	 * Used to pass in a parents rotation to the child
+	 * @param parentRotation the rotation of the parent
+	 */
+	public void propagateRotation(double parentRotation)
+	{
+		this.rotation += parentRotation;
+		this.rotation %= 360;
+		this.rotation = this.rotation * 100 / 100;
 	}
 
 	/**
@@ -513,7 +925,7 @@ public class VsdxShape extends Shape
 	public double getTopSpacing()
 	{
 		double topMargin = this.getTextTopMargin();
-		topMargin = (topMargin / 2 - 2.8) * 100/100;
+		topMargin = (topMargin / 2 - 2.8) * 100 / 100;
 		return topMargin;
 	}
 
@@ -525,7 +937,7 @@ public class VsdxShape extends Shape
 	public double getBottomSpacing()
 	{
 		double bottomMargin = this.getTextBottomMargin();
-		bottomMargin = (bottomMargin / 2 - 2.8) * 100/100;
+		bottomMargin = (bottomMargin / 2 - 2.8) * 100 / 100;
 		return bottomMargin;
 	}
 
@@ -537,7 +949,7 @@ public class VsdxShape extends Shape
 	public double getLeftSpacing()
 	{
 		double leftMargin = this.getTextLeftMargin();
-		leftMargin = (leftMargin / 2 - 2.8) * 100/100;
+		leftMargin = (leftMargin / 2 - 2.8) * 100 / 100;
 		return leftMargin;
 	}
 
@@ -549,46 +961,23 @@ public class VsdxShape extends Shape
 	public double getRightSpacing()
 	{
 		double rightMargin = this.getTextRightMargin();
-		rightMargin = (rightMargin / 2 - 2.8) * 100/100;
+		rightMargin = (rightMargin / 2 - 2.8) * 100 / 100;
 		return rightMargin;
 	}
 
 	/**
-	 * Returns the vertical align of the label.<br/>
-	 * The property may to be defined in master shape or text stylesheet.<br/>
-	 * @return Vertical align (bottom, middle and top)
-	 */
-	public String getAlignVertical()
-	{
-		String vertical = mxConstants.ALIGN_MIDDLE;
-
-		int align = Integer.parseInt(getText(this.getStyleNode(mxVsdxConstants.VERTICAL_ALIGN), "1"));
-
-		if (align == 0)
-		{
-			vertical = mxConstants.ALIGN_TOP;
-		}
-		else if (align == 2)
-		{
-			vertical = mxConstants.ALIGN_BOTTOM;
-		}
-
-		return vertical;
-	}
-
-
-	/**
 	 * Checks if the label must be rotated.<br/>
 	 * The property may to be defined in master shape or text stylesheet.<br/>
-	 * @return Returns <code>true<code/> if the label must remains horizontal.
+	 * @return Returns <code>true<code/> if the label should remain horizontal.
 	 */
 	public boolean getLabelRotation()
 	{
 		boolean hor = true;
 		//Defines rotation.
-		double rotation = this.getRotation();
-		double angle = Double.valueOf(this.getText(this.getStyleNode(mxVsdxConstants.TXT_ANGLE), "0"));
-		
+		double rotation = this.calcRotation();
+		double angle = Double.valueOf(this
+				.getValue(this.getCellElement(mxVsdxConstants.TXT_ANGLE), "0"));
+
 		angle = Math.toDegrees(angle);
 		angle = angle - rotation;
 
@@ -606,32 +995,25 @@ public class VsdxShape extends Shape
 	 */
 	public Map<String, String> getStyleFromShape()
 	{
-		Map<String, String> styleMap = new HashMap<String, String>();
+		styleMap.put(mxVsdxConstants.VSDX_ID, this.getId().toString());
 
-		//Set the style of the labels.
+		// Rotation.		
+		//		String labelRotation = getLabelRotation() ? "1" : "0";
+		this.rotation = Math.round(this.rotation);
 
-		//Defines rotation.
-		double rotation = this.getRotation();
-		rotation = Math.round(rotation);
-		
-		//Defines Label Rotation
-		String rotationString = getLabelRotation() ? "1" : "0";
+		//It gives wrong results, may be it is needed in other scenarios
+		//		if (!labelRotation.equals("1") && this.rotation != 90 && this.rotation != 270)
+		//		{
+		//			styleMap.put(mxConstants.STYLE_HORIZONTAL, labelRotation);
+		//		}
 
-		if (!rotationString.equals("1") && rotation != 90 && rotation != 270)
+		if (this.rotation != 0)
 		{
-			styleMap.put(mxConstants.STYLE_HORIZONTAL, rotationString);
+			styleMap.put(mxConstants.STYLE_ROTATION,
+					Double.toString(this.rotation));
 		}
 
-		if (rotation != 0 && rotation != 360)
-		{
-			rotation = rotation * 100/100;
-
-			styleMap.put(mxConstants.STYLE_ROTATION, Double.toString(rotation));
-		}
-
-		styleMap.put("vsdxID", this.getId().toString());
-		
-		/** FILLCOLOR **/
+		// Fill color
 		String fillcolor = getFillColor();
 
 		if (!fillcolor.equals(""))
@@ -642,9 +1024,9 @@ public class VsdxShape extends Shape
 		{
 			styleMap.put(mxConstants.STYLE_FILLCOLOR, "none");
 		}
-		
+
 		Integer id = this.getId();
-		
+
 		this.styleDebug("ID = " + id + " , Fill Color = " + fillcolor);
 
 		//Defines gradient
@@ -655,9 +1037,11 @@ public class VsdxShape extends Shape
 			styleMap.put(mxConstants.STYLE_GRADIENTCOLOR, gradient);
 			String gradientDirection = getGradientDirection();
 
-			if (!gradientDirection.equals("") && !gradientDirection.equals(mxConstants.DIRECTION_SOUTH))
+			if (!gradientDirection.equals("")
+					&& !gradientDirection.equals(mxConstants.DIRECTION_SOUTH))
 			{
-				styleMap.put(mxConstants.STYLE_GRADIENT_DIRECTION, gradientDirection);
+				styleMap.put(mxConstants.STYLE_GRADIENT_DIRECTION,
+						gradientDirection);
 			}
 		}
 		else
@@ -669,47 +1053,46 @@ public class VsdxShape extends Shape
 
 		if (opacity < 100)
 		{
-			styleMap.put(mxConstants.STYLE_FILL_OPACITY, Double.toString(opacity));
+			styleMap.put(mxConstants.STYLE_FILL_OPACITY,
+					Double.toString(opacity));
 		}
 
 		opacity = this.getOpacity(mxVsdxConstants.LINE_COLOR_TRANS);
 
 		if (opacity < 100)
 		{
-			styleMap.put(mxConstants.STYLE_STROKE_OPACITY, Double.toString(opacity));
+			styleMap.put(mxConstants.STYLE_STROKE_OPACITY,
+					Double.toString(opacity));
 		}
-		
+
 		Map<String, String> form = getForm();
 
-		if (form.containsKey(mxConstants.STYLE_SHAPE) && 
-				(form.get(mxConstants.STYLE_SHAPE).startsWith("image;")))
+		if (form.containsKey(mxConstants.STYLE_SHAPE)
+				&& (form.get(mxConstants.STYLE_SHAPE).startsWith("image;")))
 		{
 			styleMap.put(mxConstants.STYLE_WHITE_SPACE, "wrap");
 		}
 
 		styleMap.putAll(form);
 
-		//Defines if line is rounding
-		if(form.containsKey(mxConstants.STYLE_ROUNDED) && !form.get(mxConstants.STYLE_ROUNDED).equals("0"))
-		{
-			boolean isRounded = isRounded();
-
-			if (isRounded)
-			{
-				styleMap.put(mxConstants.STYLE_ROUNDED, mxVsdxConstants.TRUE);
-			}
-		}
-
 		//Defines line Pattern
 		if (isDashed())
 		{
 			styleMap.put(mxConstants.STYLE_DASHED, "1");
+
+			String dashPattern = getDashPattern();
+
+			if (dashPattern != null)
+			{
+				styleMap.put(mxConstants.STYLE_DASH_PATTERN, dashPattern);
+			}
 		}
-		
+
 		String color = getStrokeColor();
 		double tr = this.getStrokeTransparency();
-		
-		this.styleDebug("ID = " + id + " , Color = " + color + " , stroke transparency = " + tr);
+
+		this.styleDebug("ID = " + id + " , Color = " + color
+				+ " , stroke transparency = " + tr);
 
 		if (!color.equals("") && tr != 1)
 		{
@@ -721,11 +1104,12 @@ public class VsdxShape extends Shape
 		}
 
 		//Defines the line width
-		double lWeight = getLineWidth() * 100/100;
+		int lWeight = (int) Math.round(getLineWidth());
 
 		if (lWeight != 1)
 		{
-			styleMap.put(mxConstants.STYLE_STROKEWIDTH, Double.toString(lWeight));
+			styleMap.put(mxConstants.STYLE_STROKEWIDTH,
+					Integer.toString(lWeight));
 		}
 
 		/** SHADOW **/
@@ -735,43 +1119,39 @@ public class VsdxShape extends Shape
 		}
 
 		//Defines label top spacing
-		double topMargin = getTopSpacing() * 100/100;
+		int topMargin = (int) Math.round(getTopSpacing());
 
 		if (topMargin != 0)
 		{
-			styleMap.put(mxConstants.STYLE_SPACING_TOP, Double.toString(topMargin));
+			styleMap.put(mxConstants.STYLE_SPACING_TOP,
+					Integer.toString(topMargin));
 		}
 
 		//Defines label bottom spacing
-		double bottomMargin = getBottomSpacing() * 100/100;
+		int bottomMargin = (int) Math.round(getBottomSpacing());
 
 		if (bottomMargin != 0)
 		{
-			styleMap.put(mxConstants.STYLE_SPACING_BOTTOM, Double.toString(bottomMargin));
+			styleMap.put(mxConstants.STYLE_SPACING_BOTTOM,
+					Integer.toString(bottomMargin));
 		}
 
 		//Defines label left spacing
-		double leftMargin = getLeftSpacing() * 100/100;
+		int leftMargin = (int) Math.round(getLeftSpacing());
 
 		if (leftMargin != 0)
 		{
-			styleMap.put(mxConstants.STYLE_SPACING_LEFT, Double.toString(leftMargin));
+			styleMap.put(mxConstants.STYLE_SPACING_LEFT,
+					Integer.toString(leftMargin));
 		}
 
 		//Defines label right spacing
-		double rightMargin = getRightSpacing() * 100/100;
+		int rightMargin = (int) Math.round(getRightSpacing());
 
-		if(rightMargin !=0)
+		if (rightMargin != 0)
 		{
-			styleMap.put(mxConstants.STYLE_SPACING_RIGHT, Double.toString(rightMargin));
-		}
-
-		//Defines label vertical align
-		String verticalAlign = getAlignVertical();
-
-		if(verticalAlign != mxConstants.ALIGN_MIDDLE)
-		{
-			styleMap.put(mxConstants.STYLE_VERTICAL_ALIGN, verticalAlign);
+			styleMap.put(mxConstants.STYLE_SPACING_RIGHT,
+					Integer.toString(rightMargin));
 		}
 
 		String direction = getDirection(form);
@@ -780,91 +1160,61 @@ public class VsdxShape extends Shape
 		{
 			styleMap.put(mxConstants.STYLE_DIRECTION, direction);
 		}
-		
-		Element xForm = (Element) shape.getElementsByTagName(mxVsdxConstants.X_FORM).item(0);
-		
-		if (xForm != null)
+
+		String flibX = getValue(this.getCellElement(mxVsdxConstants.FLIP_X),
+				"0");
+		String flibY = getValue(this.getCellElement(mxVsdxConstants.FLIP_Y),
+				"0");
+
+		if ("1".equals(flibX))
 		{
-			Node flipX = xForm.getElementsByTagName(mxVsdxConstants.FLIP_X).item(0); 
-			Node flipY = xForm.getElementsByTagName(mxVsdxConstants.FLIP_Y).item(0); 
-			
-			if (flipX != null && flipX.getTextContent().equals("1"))
-			{
-				styleMap.put(mxConstants.STYLE_FLIPH, "1");
-			}
-			
-			if (flipY != null && flipY.getTextContent().equals("1"))
-			{
-				styleMap.put(mxConstants.STYLE_FLIPV, "1");
-			}
-		}
-/*		
-		Optional code for moving the style inside the html label to the shape's style
-		pro:
-			- label can be manipulated with the UI buttons
-		con:
-			- only a single style is allowed in a label
-*/
-		
-		if (this.htmlLabels)
-		{
-			String label = getTextLabel();
-			
-			if (label != null)
-			{		
-				if (label.startsWith("<table>") || label.startsWith("<table "))
-				{
-					styleMap.put("overflow", "fill");
-				}
-				
-				String masterId = this.getMasterId();
-				mxMasterShape masterShape = null;
-	
-				if (this.master != null)
-				{
-					if (masterId != null)
-					{
-						masterShape = this.master.getMasterShape();
-					}
-					else 
-					{
-						masterShape = this.master.getSubShape(this.getShapeMasterId());
-					}
-				}
-	
-				mxVsdxTextParser vtp = new mxVsdxTextParser(this, masterShape, textStyle, pm);
-				vtp.getHtmlTextContent();
-				
-				if (!vtp.getHorAlign(vtp.pp).equals("center"))
-				{
-					styleMap.put(mxConstants.STYLE_ALIGN, vtp.getHorAlign(vtp.pp));
-				}
-				
-				styleMap.put(mxConstants.STYLE_VERTICAL_ALIGN, vtp.getVerAlign());
-				
-				if (!vtp.getIndLeft(vtp.pp).equals("0.0"))
-				{
-					styleMap.put(mxConstants.STYLE_SPACING_LEFT, vtp.getIndLeft(vtp.pp));
-				}
-				
-				if (!vtp.getIndRight(vtp.pp).equals("0.0"))
-				{
-					styleMap.put(mxConstants.STYLE_SPACING_RIGHT, vtp.getIndRight(vtp.pp));
-				}
-				
-				if (!vtp.getSpcBefore(vtp.pp).equals("0.0"))
-				{
-					styleMap.put(mxConstants.STYLE_SPACING_TOP, vtp.getSpcBefore(vtp.pp));
-				}
-				
-				if (!vtp.getSpcAfter(vtp.pp).equals("0.0"))
-				{
-					styleMap.put(mxConstants.STYLE_SPACING_BOTTOM, vtp.getSpcAfter(vtp.pp));
-				}
-			}
+			styleMap.put(mxConstants.STYLE_FLIPH, "1");
 		}
 
-		return resolveCommonStyles(styleMap);
+		if ("1".equals(flibY))
+		{
+			styleMap.put(mxConstants.STYLE_FLIPV, "1");
+		}
+
+		resolveCommonStyles();
+
+		return this.styleMap;
+	}
+
+	private String getDashPattern()
+	{
+		ArrayList<Double> pattern = null;
+
+		String linePattern = this.getValue(
+				this.getCellElement(mxVsdxConstants.LINE_PATTERN), "0");
+
+		if (linePattern.equals("Themed"))
+		{
+			mxVsdxTheme theme = getTheme();
+
+			if (theme != null)
+			{
+				pattern = isVertex()
+						? theme.getLineDashPattern(getQuickStyleVals())
+						: theme.getConnLineDashPattern(getQuickStyleVals());
+			}
+		}
+		else
+		{
+			pattern = getLineDashPattern(Integer.parseInt(linePattern));
+		}
+
+		if (pattern != null && !pattern.isEmpty())
+		{
+			StringBuilder str = new StringBuilder();
+
+			for (Double len : pattern)
+			{
+				str.append(String.format("%.2f ", len));
+			}
+			return str.toString().trim();
+		}
+		return null;
 	}
 
 	/**
@@ -874,17 +1224,24 @@ public class VsdxShape extends Shape
 	 */
 	public boolean isDashed()
 	{
-		String linePattern = this.getText(this.getStyleNode(mxVsdxConstants.LINE_PATTERN), "0");
+		String linePattern = this.getValue(
+				this.getCellElement(mxVsdxConstants.LINE_PATTERN), "0");
 
 		if (linePattern.equals("Themed"))
 		{
-			// TODO find the theme
+			mxVsdxTheme theme = getTheme();
+
+			if (theme != null)
+			{
+				return isVertex() ? theme.isLineDashed(getQuickStyleVals())
+						: theme.isConnLineDashed(getQuickStyleVals());
+			}
 		}
 		else if (!(linePattern.equals("0") || linePattern.equals("1")))
 		{
 			return true;
 		}
-		
+
 		return false;
 	}
 
@@ -895,19 +1252,33 @@ public class VsdxShape extends Shape
 	 */
 	public double getLineWidth()
 	{
-		double lWeight = 1;
+		String lineWeight = getValue(
+				this.getCellElement(mxVsdxConstants.LINE_WEIGHT), "1");
 
-		if (this.hasLineWeight())
+		double lWeight = 1;
+		try
 		{
-			lWeight = this.getLineWeight();
+			if (lineWeight.equals("Themed"))
+			{
+				mxVsdxTheme theme = getTheme();
+
+				if (theme != null)
+				{
+					lWeight = (isVertex()
+							? theme.getLineWidth(getQuickStyleVals())
+							: theme.getConnLineWidth(getQuickStyleVals()))
+							/ 10000.0;
+				}
+			}
+			else
+			{
+				lWeight = Double.parseDouble(lineWeight);
+				lWeight = getScreenNumericalValue(lWeight);
+			}
 		}
-		else if ((masterShape != null) && masterShape.hasLineWeight())
+		catch (Exception e)
 		{
-			lWeight = masterShape.getLineWeight();
-		}
-		else if ((lineStyle != null) && lineStyle.hasLineWeight())
-		{
-			lWeight = lineStyle.getLineWeight();
+			// ignore
 		}
 
 		//Value is fixed for weight < 1
@@ -916,8 +1287,6 @@ public class VsdxShape extends Shape
 			lWeight *= 2;
 		}
 
-		lWeight = lWeight * 100/100;
-		
 		return lWeight;
 	}
 
@@ -929,17 +1298,35 @@ public class VsdxShape extends Shape
 	 */
 	public float getStartArrowSize()
 	{
-		String baSize = getText(this.getStyleNode(mxVsdxConstants.BEGIN_ARROW_SIZE), "4");
-		
+		String baSize = getValue(
+				this.getCellElement(mxVsdxConstants.BEGIN_ARROW_SIZE), "4");
+
 		try
 		{
-			return VsdxShape.arrowSizes[Integer.valueOf(baSize).intValue()];
+			int size = 4;
+
+			if (baSize.equals("Themed"))
+			{
+				mxVsdxTheme theme = getTheme();
+
+				if (theme != null)
+				{
+					size = isVertex() ? theme.getStartSize(getQuickStyleVals())
+							: theme.getConnStartSize(getQuickStyleVals());
+				}
+			}
+			else
+			{
+				size = Integer.valueOf(baSize);
+			}
+
+			return VsdxShape.arrowSizes[size];
 		}
 		catch (Exception e)
 		{
 			// ignore
 		}
-		
+
 		return 4;
 	}
 
@@ -951,28 +1338,53 @@ public class VsdxShape extends Shape
 	 */
 	public float getFinalArrowSize()
 	{
-		String eaSize = getText(this.getStyleNode(mxVsdxConstants.END_ARROW_SIZE), "4");
+		String eaSize = getValue(
+				this.getCellElement(mxVsdxConstants.END_ARROW_SIZE), "4");
 
 		try
 		{
-			return VsdxShape.arrowSizes[Integer.valueOf(eaSize).intValue()];
+			int size = 4;
+
+			if (eaSize.equals("Themed"))
+			{
+				mxVsdxTheme theme = getTheme();
+
+				if (theme != null)
+				{
+					size = isVertex() ? theme.getEndSize(getQuickStyleVals())
+							: theme.getConnEndSize(getQuickStyleVals());
+				}
+			}
+			else
+			{
+				size = Integer.valueOf(eaSize);
+			}
+
+			return VsdxShape.arrowSizes[size];
 		}
 		catch (Exception e)
 		{
 			// ignore
 		}
-		
+
 		return 4;
 	}
 
 	/**
-	 * Returns if the line is Rounded.<br/>
+	 * Returns whether the cell is Rounded.<br/>
 	 * The property may to be defined in master shape or line stylesheet.<br/>
-	 * @return Returns <code>mxVdxConstants.TRUE</code> if the line is Rounded.
+	 * @return Returns <code>true</code> if the cell is Rounded.
 	 */
 	public boolean isRounded()
 	{
-		String val = getText(this.getStyleNode(mxVsdxConstants.ROUNDING), "0");
+		String val = getValue(this.getCellElement(mxVsdxConstants.ROUNDING),
+				"0");
+
+		if ("Themed".equals(val))
+		{
+			//TODO add theme support 
+			val = "0";
+		}
 		return Double.valueOf(val) > 0;
 	}
 
@@ -986,8 +1398,9 @@ public class VsdxShape extends Shape
 		// https://msdn.microsoft.com/en-us/library/office/jj230454.aspx TODO
 		// double shdwShow = this.getNumericalValue(this.getStyleNode(mxVdxConstants.SHDW_PATTERN), 0);
 
-		String shdw = this.getText(this.getStyleNode(mxVsdxConstants.SHDW_PATTERN), "0");
-		
+		String shdw = this.getValue(
+				this.getCellElement(mxVsdxConstants.SHDW_PATTERN), "0");
+
 		if (shdw.equals("Themed"))
 		{
 			// TODO get value from theme
@@ -1019,11 +1432,11 @@ public class VsdxShape extends Shape
 			result.put(mxConstants.STYLE_EDGE, mxConstants.EDGESTYLE_ELBOW);
 			return result;
 		}
-//		else
-//		{
-//			result.put(mxConstants.STYLE_EDGE, mxConstants.NONE);
-//			return result;
-//		}
+		//		else
+		//		{
+		//			result.put(mxConstants.STYLE_EDGE, mxConstants.NONE);
+		//			return result;
+		//		}
 	}
 
 	/**
@@ -1088,15 +1501,31 @@ public class VsdxShape extends Shape
 	public String getNameU()
 	{
 		String result = shape.getAttribute(mxVsdxConstants.NAME_U);
-		
+
 		if ((result == null || result.equals("")) && masterShape != null)
 		{
 			result = masterShape.getNameU();
 		}
-		
+
 		return result;
 	}
-	
+
+	/**
+	 * Returns the Name attribute.
+	 * @return Value of the Name attribute (Human readable name).
+	 */
+	public String getName()
+	{
+		String result = shape.getAttribute(mxVsdxConstants.NAME);
+
+		if ((result == null || result.equals("")) && masterShape != null)
+		{
+			result = masterShape.getName();
+		}
+
+		return result;
+	}
+
 	/**
 	 * Returns the master name of the shape
 	 * @return Master name of the shape
@@ -1106,7 +1535,7 @@ public class VsdxShape extends Shape
 		return shapeName;
 
 	}
-	
+
 	public void setLabelOffset(mxCell vertex, String style)
 	{
 		String nameU = "";
@@ -1117,20 +1546,23 @@ public class VsdxShape extends Shape
 			nameU = shape.getAttribute(mxVsdxConstants.NAME_U);
 		}
 
-
-		if (this.getMaster() != null && this.getMaster().getMasterElement() != null)
+		if (this.getMaster() != null
+				&& this.getMaster().getMasterElement() != null)
 		{
-			if (this.getMaster().getMasterElement().hasAttribute(mxVsdxConstants.NAME_U))
+			if (this.getMaster().getMasterElement()
+					.hasAttribute(mxVsdxConstants.NAME_U))
 			{
-				masterNameU = this.getMaster().getMasterElement().getAttribute(mxVsdxConstants.NAME_U);
+				masterNameU = this.getMaster().getMasterElement()
+						.getAttribute(mxVsdxConstants.NAME_U);
 			}
 		}
 
 		//check for shape name/type, because of different (shape specific) treatment of each
-		if (nameU.startsWith("Organizational unit") 
+		if (nameU.startsWith("Organizational unit")
 				|| masterNameU.startsWith("Organizational unit"))
 		{
-			Element control = (Element) shape.getElementsByTagName(mxVsdxConstants.CONTROL).item(0);
+			Element control = (Element) shape
+					.getElementsByTagName(mxVsdxConstants.CONTROL).item(0);
 
 			Element xEl = null;
 			String xS = "0.0";
@@ -1139,8 +1571,9 @@ public class VsdxShape extends Shape
 
 			if (control != null)
 			{
-				xEl = (Element) control.getElementsByTagName(mxVsdxConstants.X).item(0);
-				
+				xEl = (Element) control.getElementsByTagName(mxVsdxConstants.X)
+						.item(0);
+
 				if (xEl.hasAttribute("F"))
 				{
 					xS = xEl.getAttribute("F");
@@ -1149,9 +1582,10 @@ public class VsdxShape extends Shape
 				{
 					xS = xEl.getTextContent();
 				}
-				
-				yEl = (Element) control.getElementsByTagName(mxVsdxConstants.Y).item(0);
-				
+
+				yEl = (Element) control.getElementsByTagName(mxVsdxConstants.Y)
+						.item(0);
+
 				if (yEl.hasAttribute("F"))
 				{
 					yS = yEl.getAttribute("F");
@@ -1192,7 +1626,7 @@ public class VsdxShape extends Shape
 				String currStyle = styleArray[i];
 				currStyle = currStyle.trim();
 
-				if(currStyle.startsWith("tabHeight="))
+				if (currStyle.startsWith("tabHeight="))
 				{
 					tabHeight = currStyle.replace("tabHeight=", "");
 				}
@@ -1213,10 +1647,11 @@ public class VsdxShape extends Shape
 			mxPoint offset = new mxPoint(xFinal, yFinal);
 			vertex.getGeometry().setOffset(offset);
 		}
-		else if (nameU.startsWith("Domain 3D") 
+		else if (nameU.startsWith("Domain 3D")
 				|| masterNameU.startsWith("Domain 3D"))
 		{
-			Element control = (Element) shape.getElementsByTagName(mxVsdxConstants.CONTROL).item(0);
+			Element control = (Element) shape
+					.getElementsByTagName(mxVsdxConstants.CONTROL).item(0);
 
 			Element xEl = null;
 			String xS = "0.0";
@@ -1225,9 +1660,11 @@ public class VsdxShape extends Shape
 
 			if (control != null)
 			{
-				xEl = (Element) control.getElementsByTagName(mxVsdxConstants.X).item(0);
+				xEl = (Element) control.getElementsByTagName(mxVsdxConstants.X)
+						.item(0);
 				xS = xEl.getAttribute("F");
-				yEl = (Element) control.getElementsByTagName(mxVsdxConstants.Y).item(0);
+				yEl = (Element) control.getElementsByTagName(mxVsdxConstants.Y)
+						.item(0);
 				yS = yEl.getAttribute("F");
 			}
 
@@ -1262,7 +1699,7 @@ public class VsdxShape extends Shape
 			vertex.getGeometry().setOffset(offset);
 		}
 	}
-	
+
 	/**
 	 * Returns the constant that represents the Shape.
 	 * @return String that represent the form.
@@ -1270,13 +1707,14 @@ public class VsdxShape extends Shape
 	public Map<String, String> getForm()
 	{
 		Map<String, String> result = new HashMap<String, String>();
-	
+
 		this.styleDebug("Looking to match shape = " + shapeName);
 
-		if (shapeName != null && !shapeName.equals("") && VsdxShape.USE_SHAPE_MATCH)
+		if (shapeName != null && !shapeName.equals("")
+				&& VsdxShape.USE_SHAPE_MATCH)
 		{
 			String trans = mxResources.get(shapeName);
-			
+
 			if (trans != null && !trans.equals(""))
 			{
 				this.styleDebug("Translation = " + trans);
@@ -1284,72 +1722,60 @@ public class VsdxShape extends Shape
 				return result;
 			}
 		}
-		
+
 		if (this.isVertex())
 		{
 			try
 			{
 				String type = VsdxShape.getType(this.getShape());
-				String foreignType = "";
+				// String foreignType = "";
 				this.styleDebug("shape type = " + type);
 
-				if (this.imageData != null)
+				//The master may contain the foreign object data
+				if (this.imageData != null
+						|| (mxVsdxConstants.FOREIGN.equals(type)
+								&& masterShape != null
+								&& masterShape.imageData != null))
 				{
+					Map<String, String> imageData = this.imageData != null
+							? this.imageData : masterShape.imageData;
+
 					result.put("shape", "image");
 					result.put("aspect", "fixed");
-					String iType = this.imageData.get("iType");
-					String iData = this.imageData.get("iData");
+					String iType = imageData.get("iType");
+					String iData = imageData.get("iData");
+
 					result.put("image", "data:image/" + iType + "," + iData);
 					return result;
 				}
-						
-				String parsedGeom = "";
 
-				if (this.masterShape != null)
-				{
-					this.masterShape.debug = this.debug;
-					parsedGeom = this.masterShape.parseGeom();
-				}
-				else
-				{
-					this.styleDebug("No master shape found when looking for geom");
-				}
-				
-				if (parsedGeom.equals(""))
-				{
-					parsedGeom = this.parseGeom();
-					this.styleDebug("No master shape geom found");
-				}
-				
+				//Shape inherit master geometry and can change some of it or override it completely. So, no need to parse the master instead of the shape itself
+				String parsedGeom = this.parseGeom();
+
 				if (parsedGeom.equals(""))
 				{
 					this.styleDebug("No geom found");
 					return result;
 				}
-	
-				String stencil = URLEncoder.encode(parsedGeom, "UTF-8")
-				        .replaceAll("\\+", "%20")
-				        .replaceAll("\\%21", "!")
-				        .replaceAll("\\%27", "'")
-				        .replaceAll("\\%28", "(")
-				        .replaceAll("\\%29", ")")
-				        .replaceAll("\\%7E", "~");
-				
+
+				String stencil = Utils.encodeURIComponent(parsedGeom, "UTF-8");
+
 				byte[] bytes = stencil.getBytes("UTF-8");
-				Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION, true);
+				Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION,
+						true);
 				deflater.setInput(bytes);
 				ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-				
+
 				deflater.finish();
-			
-				byte[] buffer = new byte[1024];   
-		
+
+				byte[] buffer = new byte[1024];
+
 				while (!deflater.finished())
-				{  
+				{
 					int count = deflater.deflate(buffer);
-					outputStream.write(buffer, 0, count);   
-				}  
-				
+					outputStream.write(buffer, 0, count);
+				}
+
 				try
 				{
 					outputStream.close();
@@ -1358,14 +1784,14 @@ public class VsdxShape extends Shape
 				{
 					// TODO Auto-generated catch block
 					e.printStackTrace();
-				}  
-				   
+				}
+
 				byte[] output = outputStream.toByteArray();
 				deflater.end();
-		
+
 				byte[] encoded = Base64.encodeBase64(output);
 				String enc = new String(encoded, "UTF-8");
-				
+
 				result.put(mxConstants.STYLE_SHAPE, "stencil(" + enc + ")");
 			}
 			catch (UnsupportedEncodingException e)
@@ -1378,7 +1804,7 @@ public class VsdxShape extends Shape
 		{
 			return getEdgeStyle();
 		}
-		
+
 		return result;
 	}
 
@@ -1390,7 +1816,8 @@ public class VsdxShape extends Shape
 	{
 		String name = getNameU();
 
-		if (name.equals("Off-page reference") || name.equals("Lined/Shaded process"))
+		if (name.equals("Off-page reference")
+				|| name.equals("Lined/Shaded process"))
 		{
 			return true;
 		}
@@ -1415,7 +1842,7 @@ public class VsdxShape extends Shape
 	public String getDirection(Map<String, String> form)
 	{
 		String offsetS = (String) mxResources.get("mxOffset" + shapeName);
-		
+
 		if (offsetS == null || offsetS.equals("0") || offsetS.equals(""))
 		{
 			return mxConstants.DIRECTION_EAST;
@@ -1435,7 +1862,7 @@ public class VsdxShape extends Shape
 
 		return mxConstants.DIRECTION_EAST;
 	}
-	
+
 	/**
 	 * Checks if a shape may to be imported like a Sub-process.
 	 * This method is approximated.
@@ -1458,38 +1885,12 @@ public class VsdxShape extends Shape
 		return result;
 
 		//result.put("edgeStyle", "orthogonalEdgeStyle");
-		//result.put("rounded", isEdgeRounded());
 		//return result;
 
 		//result.put("curved", "1");
 		//return result;
 
 		//return null;
-	}
-	
-	/**
-	 * @return 1 if Visio edge is rounded, 0 if square
-	 */
-	private String isEdgeRounded()
-	{
-		if (shape != null)
-		{
-			NodeList lineList = shape.getElementsByTagName(mxVsdxConstants.LINE);
-			Element firstLine = (Element) lineList.item(0);
-			
-			if (firstLine != null)
-			{
-				Element firstRounding = (Element) firstLine.getElementsByTagName(mxVsdxConstants.ROUNDING).item(0);
-				String rounding = firstRounding.getTextContent();
-				
-				if (rounding != null && !rounding.equals("") && !rounding.equals("0") && !rounding.equals("0.0"))
-				{
-					return "1";
-				}
-			}
-		}
-		
-		return "0";
 	}
 
 	public Map<Integer, VsdxShape> getChildShapes()
@@ -1501,154 +1902,92 @@ public class VsdxShape extends Shape
 	{
 		this.childShapes = childShapes;
 	}
-	
-	/**
-	 * @return true if shape has a control element that specifies label position
-	 */
-	public boolean hasLabelControl()
-	{
-		String txtPinXF = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_X, "F", "");
-		String txtPinYF = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_X, "F", "");
 
-		mxMasterShape masterShape = master != null ? master.getMasterShape() : null;
-
-		if (masterShape != null)
-		{
-			if (txtPinXF == "" || txtPinXF.toLowerCase().equals("inh"))
-			{
-				txtPinXF = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_X, "F", "");
-			}
-
-			if (txtPinYF == "" || txtPinYF.toLowerCase().equals("inh"))
-			{
-				txtPinYF = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_Y, "F", "");
-			}
-		}
-
-
-		if ((txtPinXF != "" && txtPinYF != "") && 
-				(txtPinXF.contains("GUARD(Controls.Row_") || txtPinYF.contains("GUARD(Controls.Row_")))
-		{
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * @return true if shape has a control element that specifies label position (checks for the variant that uses entries in the <b>Scratch</b> cell)
-	 */
-	public boolean hasScratchControl()
-	{
-		String xConF = this.getAttribute(mxVsdxConstants.CONTROL, mxVsdxConstants.X_CON, "F", "");
-		String yConF = this.getAttribute(mxVsdxConstants.CONTROL, mxVsdxConstants.Y_CON, "F", "");
-
-		mxMasterShape masterShape = master != null ? master.getMasterShape() : null;
-
-		if (masterShape != null)
-		{
-			if (xConF == "" || xConF.toLowerCase().equals("inh"))
-			{
-				xConF = masterShape.getAttribute(mxVsdxConstants.CONTROL, mxVsdxConstants.X_CON, "F", "");
-			}
-
-			if (yConF == "" || yConF.toLowerCase().equals("inh"))
-			{
-				yConF = masterShape.getAttribute(mxVsdxConstants.CONTROL, mxVsdxConstants.Y_CON, "F", "");
-			}
-		}
-
-		if (xConF.contains("4-2*Scratch.A") || yConF.contains("4-2*Scratch.B"))
-		{
-			if (this.getText() != null || this.masterShape.getText() != null)
-			{
-				return true;
-			}
-		}
-
-		return false;
-	}
-	
 	public boolean isDisplacedLabel()
 	{
-		String txtPinXF = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_X, "F", "");
-		String txtPinYF = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_Y, "F", "");
-		String txtWidthF = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_WIDTH, "F", "");
-		String txtHeightF = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_HEIGHT, "F", "");
-
-		mxMasterShape masterShape = master != null ? master.getMasterShape() : null;
+		String txtPinXF = this.getAttribute(mxVsdxConstants.TXT_PIN_X, "F", "");
+		String txtPinYF = this.getAttribute(mxVsdxConstants.TXT_PIN_Y, "F", "");
+		String txtWidthF = this.getAttribute(mxVsdxConstants.TXT_WIDTH, "F",
+				"");
+		String txtHeightF = this.getAttribute(mxVsdxConstants.TXT_HEIGHT, "F",
+				"");
 
 		if (masterShape != null)
 		{
 			if (txtPinXF == "" || txtPinXF.toLowerCase().equals("inh"))
 			{
-				txtPinXF = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_X, "F", "");
+				txtPinXF = masterShape.getAttribute(mxVsdxConstants.TXT_PIN_X,
+						"F", "");
 			}
 
 			if (txtPinYF == "" || txtPinYF.toLowerCase().equals("inh"))
 			{
-				txtPinYF = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_PIN_Y, "F", "");
+				txtPinYF = masterShape.getAttribute(mxVsdxConstants.TXT_PIN_Y,
+						"F", "");
 			}
 
 			if (txtWidthF == "" || txtWidthF.toLowerCase().equals("inh"))
 			{
-				txtWidthF = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_WIDTH, "F", "");
+				txtWidthF = masterShape.getAttribute(mxVsdxConstants.TXT_WIDTH,
+						"F", "");
 			}
 
 			if (txtHeightF == "" || txtHeightF.toLowerCase().equals("inh"))
 			{
-				txtHeightF = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_HEIGHT, "F", "");
+				txtHeightF = masterShape
+						.getAttribute(mxVsdxConstants.TXT_HEIGHT, "F", "");
 			}
 		}
 
-		if (txtPinXF.toLowerCase().equals("width*0.5") &&
-				txtPinYF.toLowerCase().equals("height*0.5") &&
-				txtWidthF.toLowerCase().equals("width*1") &&
-				txtHeightF.toLowerCase().equals("height*1"))
+		if (txtPinXF.toLowerCase().equals("width*0.5")
+				&& txtPinYF.toLowerCase().equals("height*0.5")
+				&& txtWidthF.toLowerCase().equals("width*1")
+				&& txtHeightF.toLowerCase().equals("height*1"))
 		{
 			return false;
 		}
-		else if (txtPinXF.toLowerCase().startsWith("width*") &&
-				txtPinYF.toLowerCase().startsWith("height*") &&
-				txtWidthF.toLowerCase().startsWith("width*") &&
-				txtHeightF.toLowerCase().startsWith("height*"))
-//		else if (txtPinXF.toLowerCase().startsWith("width*") &&
-//				txtPinYF.toLowerCase().startsWith("height*"))
+		else if (txtPinXF.toLowerCase().startsWith("width*")
+				&& txtPinYF.toLowerCase().startsWith("height*")
+				&& txtWidthF.toLowerCase().startsWith("width*")
+				&& txtHeightF.toLowerCase().startsWith("height*"))
+		//		else if (txtPinXF.toLowerCase().startsWith("width*") &&
+		//				txtPinYF.toLowerCase().startsWith("height*"))
 		{
 			return true;
 		}
-		else if (txtPinXF.toLowerCase().startsWith("controls.row_") ||
-				txtPinYF.toLowerCase().startsWith("controls.row_"))
+		else if (txtPinXF.toLowerCase().startsWith("controls.row_")
+				|| txtPinYF.toLowerCase().startsWith("controls.row_"))
 		{
 			return true;
 		}
 
 		return false;
 	}
-	
+
 	public boolean isRotatedLabel()
 	{
-		String txtAngleValue = this.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_ANGLE, "V", "");
-
-		mxMasterShape masterShape = master != null ? master.getMasterShape() : null;
+		String txtAngleValue = this.getAttribute(mxVsdxConstants.TXT_ANGLE, "V",
+				"");
 
 		if (masterShape != null)
 		{
 			if (txtAngleValue.equals(""))
 			{
-				txtAngleValue = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_ANGLE, "V", "");
+				txtAngleValue = masterShape
+						.getAttribute(mxVsdxConstants.TXT_ANGLE, "V", "");
 			}
 
 		}
 
-		if (!txtAngleValue.equals("0") && !txtAngleValue.equals("0.0") && !txtAngleValue.equals(""))
+		if (!txtAngleValue.equals("0") && !txtAngleValue.equals("0.0")
+				&& !txtAngleValue.equals(""))
 		{
 			return true;
 		}
 
 		return false;
 	}
-	
+
 	public void setRootShape(VsdxShape shape)
 	{
 		this.rootShape = shape;
@@ -1658,9 +1997,9 @@ public class VsdxShape extends Shape
 	{
 		return this.rootShape;
 	}
-	
+
 	// Edge specific methods 
-	
+
 	/**
 	 * Returns the coordinates of the begin point of an Edge Shape.
 	 * @param parentHeight Height of the parent of the shape.
@@ -1668,8 +2007,10 @@ public class VsdxShape extends Shape
 	 */
 	public mxPoint getStartXY(double parentHeight)
 	{
-		double startX = getScreenNumericalValue(this.getStyleNode(mxVsdxConstants.BEGIN_X), 0);
-		double startY = parentHeight - getScreenNumericalValue(this.getStyleNode(mxVsdxConstants.BEGIN_Y), 0);
+		double startX = Math.round(getScreenNumericalValue(
+				this.getCellElement(mxVsdxConstants.BEGIN_X), 0) * 100) / 100;
+		double startY = Math.round((parentHeight - getScreenNumericalValue(
+				this.getCellElement(mxVsdxConstants.BEGIN_Y), 0)) * 100) / 100;
 
 		return new mxPoint(startX, startY);
 	}
@@ -1681,98 +2022,29 @@ public class VsdxShape extends Shape
 	 */
 	public mxPoint getEndXY(double parentHeight)
 	{
-		double endX = getScreenNumericalValue(this.getStyleNode(mxVsdxConstants.END_X), 0);
-		double endY = parentHeight- getScreenNumericalValue(this.getStyleNode(mxVsdxConstants.END_Y), 0);
+		double endX = Math.round(getScreenNumericalValue(
+				this.getCellElement(mxVsdxConstants.END_X), 0) * 100) / 100;
+		double endY = Math.round((parentHeight - getScreenNumericalValue(
+				this.getCellElement(mxVsdxConstants.END_Y), 0)) * 100) / 100;
 
 		return new mxPoint(endX, endY);
 	}
-	
+
 	/**
 	 * Returns the list of routing points of a edge shape.
 	 * @param parentHeight Height of the parent of the shape.
 	 * @return List of mxPoint that represents the routing points.
 	 */
-	public List<mxPoint> getRoutingPoints(double parentHeight)
+	public List<mxPoint> getRoutingPoints(double parentHeight,
+			mxPoint startPoint,
+			double rotation/*, boolean flipX, boolean flipY*/)
 	{
-		mxPoint startXY = getStartXY(parentHeight);
-		List<mxPoint> points = new ArrayList<mxPoint>();
-		
-		if (!(this.hasGeom()))
+		if (geomList != null)
 		{
-			return points;
+			return geomList.getRoutingPoints(parentHeight, startPoint,
+					rotation);
 		}
-		
-		int controlPointCount = 0;
-		int currentPointCount = 0;
-		
-		for (int i = 0; i < 2; i++)
-		{
-			for (int j = 0; j < geom.size(); j++)
-			{
-				Node child = geom.get(j).getFirstChild();
-				
-				while (child != null)
-				{
-					if (child instanceof Element)
-					{
-						Element childElem = (Element) child;
-						String childName = childElem.getNodeName();
-						String del = childElem.getAttribute("Del");
-						
-						if (childName.equals("Cell"))
-						{
-							childName = childElem.getAttribute("N");
-						}
-						else if (childName.equals("Row"))
-						{
-							childName = childElem.getAttribute("T");
-						}
-						
-						if (!del.equals("1"))
-						{
-							switch (childName)
-							{
-								case "LineTo":
-									if (i == 0)
-									{
-										controlPointCount++;
-									}
-									else if (currentPointCount < controlPointCount - 1)
-									{
-										Map <String, String> children = getChildValues(childElem, null);
-										String xValue = children.get("X");
-										String yValue = children.get("Y");
-										double x = 0, y = 0;
-											
-										if (xValue != null && yValue != null)
-										{
-											x = Double.parseDouble(xValue) * mxVsdxUtils.conversionFactor;
-											y = (Double.parseDouble(yValue) * mxVsdxUtils.conversionFactor) * -1;
-										}
-										
-										x += startXY.getX();
-										y += startXY.getY();
-			
-										x = Math.round(x * 100.0) / 100.0;
-										y = Math.round(y * 100.0) / 100.0;
-			
-										points.add(new mxPoint(x, y));
-										currentPointCount++;
-									}
-									break;
-								default:
-									break;
-									
-							}
-						}
-					}
-	
-					child = child.getNextSibling();
-				}
-			}
-		}
-
-		return points;
+		return null;
 	}
 
 	/**
@@ -1785,17 +2057,20 @@ public class VsdxShape extends Shape
 		mxPoint startXY = getStartXY(parentHeight);
 		mxPoint endXY = getEndXY(parentHeight);
 		ArrayList<mxPoint> pointList = new ArrayList<mxPoint>();
-		
+
 		if (shape != null)
 		{
-			NodeList geomList = shape.getElementsByTagName(mxVsdxConstants.GEOM);
+			NodeList geomList = shape
+					.getElementsByTagName(mxVsdxConstants.GEOM);
 
 			if (geomList.getLength() > 0)
 			{
 				Element firstGeom = (Element) geomList.item(0);
-				Element firstNURBS = (Element) firstGeom.getElementsByTagName(mxVsdxConstants.NURBS_TO).item(0);
-				Element firstE = (Element) firstNURBS.getElementsByTagName("E").item(0);
-				
+				Element firstNURBS = (Element) firstGeom
+						.getElementsByTagName(mxVsdxConstants.NURBS_TO).item(0);
+				Element firstE = (Element) firstNURBS.getElementsByTagName("E")
+						.item(0);
+
 				if (firstE != null)
 				{
 					String f = firstE.getAttribute("F");
@@ -1805,12 +2080,12 @@ public class VsdxShape extends Shape
 					f = f.replaceAll("\\s\\s", " ");
 					String[] pointsS = f.split(" ");
 					double[] pointsRaw = new double[pointsS.length];
-					
+
 					for (int i = 0; i < pointsS.length; i++)
 					{
-						pointsRaw[i] = Double.parseDouble(pointsS[i]); 
+						pointsRaw[i] = Double.parseDouble(pointsS[i]);
 					}
-					
+
 					for (int i = 2; i + 4 < pointsS.length; i = i + 4)
 					{
 						mxPoint currPoint = new mxPoint();
@@ -1820,13 +2095,13 @@ public class VsdxShape extends Shape
 						double widthFixed = Math.min(100, width);
 						double heightFixed = 100;
 						double finalX = 0;
-						
+
 						finalX = startXY.getX() + widthFixed * rawX;
-						currPoint.setX(finalX);
-						currPoint.setY(startXY.getY() - heightFixed * rawY);
+						currPoint.setX(Math.round(finalX * 100) / 100);
+						currPoint.setY(Math.round((startXY.getY() - heightFixed * rawY) * 100) / 100);
 						pointList.add(currPoint);
 					}
-					
+
 					return pointList;
 				}
 				else
@@ -1838,14 +2113,32 @@ public class VsdxShape extends Shape
 
 		return null;
 	}
-	
+
 	/**
 	 * Analyzes a edge shape and returns a string with the style.
 	 * @return style read from the edge shape.
 	 */
 	public Map<String, String> getStyleFromEdgeShape(double parentHeight)
 	{
-		Map<String, String> styleMap = new Hashtable<String, String>();
+		styleMap.put(mxVsdxConstants.VSDX_ID, this.getId().toString());
+
+		// Rotation.
+		//		double rotation = this.getRotation();
+		//		rotation = Math.round(rotation);
+		//		
+		//		String rotationString = getLabelRotation() ? "1" : "0";
+		//
+		//		if (!rotationString.equals("1") && rotation != 90 && rotation != 270)
+		//		{
+		//			styleMap.put(mxConstants.STYLE_HORIZONTAL, rotationString);
+		//		}
+		//
+		//		if (rotation != 0 && rotation != 360)
+		//		{
+		//			rotation = rotation * 100/100;
+		//
+		//			styleMap.put(mxConstants.STYLE_ROTATION, Double.toString(rotation));
+		//		}
 
 		//Defines Edge Shape
 		Map<String, String> edgeShape = getForm();
@@ -1856,54 +2149,71 @@ public class VsdxShape extends Shape
 		}
 
 		//Defines Pattern
-		String dashed = isDashed() ? "1" : "0";
-
-		if (dashed.equals("1"))
+		if (isDashed())
 		{
-			styleMap.put(mxConstants.STYLE_DASHED, dashed);
+			styleMap.put(mxConstants.STYLE_DASHED, "1");
+
+			String dashPattern = getDashPattern();
+
+			if (dashPattern != null)
+			{
+				styleMap.put(mxConstants.STYLE_DASH_PATTERN, dashPattern);
+			}
 		}
 
 		//Defines Begin Arrow
 		String startArrow = getEdgeMarker(true);
 
-		if(startArrow != null)
+		if (startArrow != null)
 		{
+			if (startArrow.startsWith(ARROW_NO_FILL_MARKER))
+			{
+				startArrow = startArrow
+						.substring(ARROW_NO_FILL_MARKER.length());
+				styleMap.put(mxConstants.STYLE_STARTFILL, "0");
+			}
 			styleMap.put(mxConstants.STYLE_STARTARROW, startArrow);
 		}
 
 		//Defines End Arrow
 		String endArrow = getEdgeMarker(false);
 
-		if(endArrow != null)
+		if (endArrow != null)
 		{
+			if (endArrow.startsWith(ARROW_NO_FILL_MARKER))
+			{
+				endArrow = endArrow.substring(ARROW_NO_FILL_MARKER.length());
+				styleMap.put(mxConstants.STYLE_ENDFILL, "0");
+			}
 			styleMap.put(mxConstants.STYLE_ENDARROW, endArrow);
 		}
 
 		//Defines the start arrow size.
-		float saSize = getStartArrowSize() * 100/100;
+		int saSize = (int) Math.round(getStartArrowSize());
 
 		if (saSize != 6)
 		{
-			styleMap.put(mxConstants.STYLE_STARTSIZE, Float.toString(saSize));
+			styleMap.put(mxConstants.STYLE_STARTSIZE, Integer.toString(saSize));
 		}
 
 		//Defines the end arrow size.
-		float faSize = getFinalArrowSize() * 100/100;
+		int faSize = (int) Math.round(getFinalArrowSize());
 
 		if (faSize != 6)
 		{
-			styleMap.put(mxConstants.STYLE_ENDSIZE, Float.toString(faSize));
+			styleMap.put(mxConstants.STYLE_ENDSIZE, Integer.toString(faSize));
 		}
 
 		//Defines the line width
-		double lWeight = getLineWidth() * 100/100;
+		int lWeight = (int) Math.round(getLineWidth());
 
 		if (lWeight != 1.0)
 		{
-			styleMap.put(mxConstants.STYLE_STROKEWIDTH, Double.toString(lWeight));
+			styleMap.put(mxConstants.STYLE_STROKEWIDTH,
+					Integer.toString(lWeight));
 		}
 
-		//Defines color
+		// Color
 		String color = getStrokeColor();
 
 		if (!color.equals(""))
@@ -1911,7 +2221,7 @@ public class VsdxShape extends Shape
 			styleMap.put(mxConstants.STYLE_STROKECOLOR, color);
 		}
 
-		/** SHADOW **/
+		// Shadow
 		if (isShadow())
 		{
 			styleMap.put(mxConstants.STYLE_SHADOW, mxVsdxConstants.TRUE);
@@ -1929,20 +2239,23 @@ public class VsdxShape extends Shape
 		}
 
 		//Defines label top spacing
-		double topMargin = getTopSpacing() * 100/100;
-		styleMap.put(mxConstants.STYLE_SPACING_TOP, Double.toString(topMargin));
+		int topMargin = (int) Math.round(getTopSpacing());
+		styleMap.put(mxConstants.STYLE_SPACING_TOP, Integer.toString(topMargin));
 
 		//Defines label bottom spacing
-		double bottomMargin = getBottomSpacing() * 100/100;
-		styleMap.put(mxConstants.STYLE_SPACING_BOTTOM, Double.toString(bottomMargin));
+		int bottomMargin = (int) Math.round(getBottomSpacing());
+		styleMap.put(mxConstants.STYLE_SPACING_BOTTOM,
+				Integer.toString(bottomMargin));
 
 		//Defines label left spacing
-		double leftMargin = getLeftSpacing() * 100/100;
-		styleMap.put(mxConstants.STYLE_SPACING_LEFT, Double.toString(leftMargin));
+		int leftMargin = (int) Math.round(getLeftSpacing());
+		styleMap.put(mxConstants.STYLE_SPACING_LEFT,
+				Integer.toString(leftMargin));
 
 		//Defines label right spacing
-		double rightMargin = getRightSpacing() * 100/100;
-		styleMap.put(mxConstants.STYLE_SPACING_RIGHT, Double.toString(rightMargin));
+		int rightMargin = (int) Math.round(getRightSpacing());
+		styleMap.put(mxConstants.STYLE_SPACING_RIGHT,
+				Integer.toString(rightMargin));
 
 		//Defines label vertical align
 		String verticalAlign = getAlignVertical();
@@ -1951,26 +2264,34 @@ public class VsdxShape extends Shape
 		//Defines Label Rotation
 		//		styleMap.put(mxConstants.STYLE_HORIZONTAL, getLabelRotation());
 
-		//Adds html encoding - may need further elaboration
 		styleMap.put("html", "1");
 
-		return resolveCommonStyles(styleMap);
+		resolveCommonStyles();
+		//		System.out.println(this.getId());
+		//		System.out.println(Arrays.toString(styleMap.entrySet().toArray()));
+
+		return this.styleMap;
 	}
-	
+
 	/**
 	 * Analyzes a edge shape and returns a string with the style.
 	 * @return style read from the edge shape.
 	 */
-	public Map<String, String> resolveCommonStyles(Map<String, String> styleMap)
+	public Map<String, String> resolveCommonStyles()
 	{
 		/** LABEL BACKGROUND COLOR **/
-		String lbkgnd = this.getTextBkgndColor(this.getStyleNode(mxVsdxConstants.TEXT_BKGND));
+		String lbkgnd = this.getTextBkgndColor(
+				this.getCellElement(mxVsdxConstants.TEXT_BKGND));
 
 		if (!lbkgnd.equals(""))
 		{
-			styleMap.put(mxConstants.STYLE_LABEL_BACKGROUNDCOLOR, lbkgnd);
+			this.styleMap.put(mxConstants.STYLE_LABEL_BACKGROUNDCOLOR, lbkgnd);
 		}
-		
+
+		/** ROUNDING **/
+		this.styleMap.put(mxConstants.STYLE_ROUNDED,
+				isRounded() ? mxVsdxConstants.TRUE : mxVsdxConstants.FALSE);
+
 		return styleMap;
 	}
 
@@ -1980,10 +2301,47 @@ public class VsdxShape extends Shape
 	 */
 	public String getEdgeMarker(boolean start)
 	{
-		String marker = this.getText(this.getStyleNode(start ? mxVsdxConstants.BEGIN_ARROW : mxVsdxConstants.END_ARROW), "0");
-		return VsdxShape.arrowTypes.get(marker);
+		String marker = this.getValue(this.getCellElement(start
+				? mxVsdxConstants.BEGIN_ARROW : mxVsdxConstants.END_ARROW),
+				"0");
+
+		int val = 0;
+		try
+		{
+			if (marker.equals("Themed"))
+			{
+				mxVsdxTheme theme = getTheme();
+
+				if (theme != null)
+				{
+					val = isVertex()
+							? theme.getEdgeMarker(start, getQuickStyleVals())
+							: theme.getConnEdgeMarker(start,
+									getQuickStyleVals());
+
+				}
+			}
+			else
+			{
+				val = Integer.parseInt(marker);
+			}
+		}
+		catch (Exception e)
+		{
+			// ignore
+		}
+
+		String type = VsdxShape.arrowTypes.get(val);
+
+		if (val > 0 && type == null)
+		{
+			//if arrow  head type is not supported, use the open arrow instead
+			type = VsdxShape.arrowTypes.get(1);
+		}
+
+		return type;
 	}
-	
+
 	/**
 	 * Locates the first entry for the specified style string in the style hierarchy.
 	 * The order is to look locally, then delegate the request to the relevant parent style
@@ -1991,15 +2349,175 @@ public class VsdxShape extends Shape
 	 * @param key The key of the style to find
 	 * @return the Element that first resolves to that style key or null or none is found
 	 */
-	protected Element getStyleNode(String key)
+	protected Element getCellElement(String key)
 	{
-		Element elem = super.getStyleNode(key);
-		
+		Element elem = super.getCellElement(key);
+
 		if (elem == null && this.masterShape != null)
 		{
-			return this.masterShape.getStyleNode(key);
+			return this.masterShape.getCellElement(key);
 		}
-		
+
 		return elem;
 	}
+
+	protected Element getCellElement(String cellKey, String index,
+			String sectKey)
+	{
+		Element elem = super.getCellElement(cellKey, index, sectKey);
+
+		if (elem == null && this.masterShape != null)
+		{
+			return this.masterShape.getCellElement(cellKey, index, sectKey);
+		}
+
+		return elem;
+	}
+
+	/**
+	 * Creates a sub shape for <b>shape</b> that contains the label. Used internally, when the label is positioned by an anchor.
+	 * @param graph
+	 * @param shape the shape we want to create the label for
+	 * @param parent
+	 * @param parentHeight
+	 * @return label sub-shape
+	 */
+	public mxCell createLabelSubShape(mxGraph graph, mxCell parent)
+	{
+		double txtWV = getScreenNumericalValue(
+				getShapeNode(mxVsdxConstants.TXT_WIDTH), getWidth());
+		double txtHV = getScreenNumericalValue(
+				getShapeNode(mxVsdxConstants.TXT_HEIGHT), getHeight());
+		double txtLocPinXV = getScreenNumericalValue(
+				getShapeNode(mxVsdxConstants.TXT_LOC_PIN_X), txtWV / 2.0);
+		double txtLocPinYV = getScreenNumericalValue(
+				getShapeNode(mxVsdxConstants.TXT_LOC_PIN_Y), txtHV / 2.0);
+		double txtPinXV = getScreenNumericalValue(
+				getShapeNode(mxVsdxConstants.TXT_PIN_X), txtLocPinXV);
+		double txtPinYV = getScreenNumericalValue(
+				getShapeNode(mxVsdxConstants.TXT_PIN_Y), txtLocPinYV);
+		double txtAngleV = getValueAsDouble(
+				getShapeNode(mxVsdxConstants.TXT_ANGLE), 0);
+
+		String textLabel = getTextLabel();
+
+		if (textLabel != null && !textLabel.isEmpty())
+		{
+			Map<String, String> styleMap = new HashMap<String, String>(
+					getStyleMap());
+			styleMap.put(mxConstants.STYLE_FILLCOLOR, mxConstants.NONE);
+			styleMap.put(mxConstants.STYLE_STROKECOLOR, mxConstants.NONE);
+			styleMap.put(mxConstants.STYLE_GRADIENTCOLOR, mxConstants.NONE);
+
+			//We don't need to override these attributes in order to properly align the text
+			if (!styleMap.containsKey("align"))
+				styleMap.put("align", "center");
+			if (!styleMap.containsKey("verticalAlign"))
+				styleMap.put("verticalAlign", "middle");
+			if (!styleMap.containsKey("whiteSpace"))
+				styleMap.put("whiteSpace", "wrap");
+
+			// Doesn't make sense to set a shape, it's not rendered and doesn't affect the text perimeter
+			styleMap.remove("shape");
+			//image should be set for the parent shape only
+			styleMap.remove("image");
+			//styleMap.put("html", "1");
+
+			double rotation = getRotation();
+
+			if (txtAngleV != 0)
+			{
+				double labRot = 360 - Math.toDegrees(txtAngleV);
+
+				labRot = Math.round(((labRot + rotation) % 360.0) * 100.0)
+						/ 100.0;
+
+				if (labRot != 0.0)
+				{
+					styleMap.put("rotation", Double.toString(labRot));
+				}
+			}
+
+			String style = "text;" + mxVsdxUtils.getStyleString(styleMap, "=");
+
+			double y = parent.getGeometry().getHeight()
+					- (txtPinYV + txtHV - txtLocPinYV);
+			double x = txtPinXV - txtLocPinXV;
+
+			if (rotation > 0)
+			{
+				mxGeometry tmpGeo = new mxGeometry(x, y, txtWV, txtHV);
+				mxGeometry pgeo = parent.getGeometry();
+				double hw = pgeo.getWidth() / 2, hh = pgeo.getHeight() / 2;
+				Utils.rotatedGeometry(tmpGeo, rotation, hw, hh);
+				x = tmpGeo.getX();
+				y = tmpGeo.getY();
+			}
+
+			mxCell v1 = (mxCell) graph.insertVertex(parent, null, textLabel,
+				Math.round(x * 100) / 100, Math.round(y * 100) / 100,
+				Math.round(txtWV * 100) / 100, Math.round(txtHV * 100) / 100,
+				style + ";html=1;");
+
+			return v1;
+		}
+
+		return null;
+	}
+
+	public mxPoint getLblEdgeOffset(mxGraphView view, List<mxPoint> points)
+	{
+		if (points != null && points.size() > 1)
+		{
+			//find mxGraph label offset
+			mxCellState state = new mxCellState();
+			state.setAbsolutePoints(points);
+			view.updateEdgeBounds(state);
+			mxPoint mxOffset = view.getPoint(state);
+			mxPoint p0 = points.get(0);
+			mxPoint pe = points.get(points.size() - 1);
+
+			//Calculate the text offset
+			double txtWV = getScreenNumericalValue(
+					getShapeNode(mxVsdxConstants.TXT_WIDTH), getWidth());
+			double txtHV = getScreenNumericalValue(
+					getShapeNode(mxVsdxConstants.TXT_HEIGHT), getHeight());
+			double txtLocPinXV = getScreenNumericalValue(
+					getShapeNode(mxVsdxConstants.TXT_LOC_PIN_X), 0);
+			double txtLocPinYV = getScreenNumericalValue(
+					getShapeNode(mxVsdxConstants.TXT_LOC_PIN_Y), 0);
+			double txtPinXV = getScreenNumericalValue(
+					getShapeNode(mxVsdxConstants.TXT_PIN_X), 0);
+			double txtPinYV = getScreenNumericalValue(
+					getShapeNode(mxVsdxConstants.TXT_PIN_Y), 0);
+
+			double y = (getHeight() - (p0.getY() - pe.getY())) / 2 + p0.getY()
+					- mxOffset.getY() - (txtPinYV - txtLocPinYV + txtHV / 2);
+			double x = txtPinXV - txtLocPinXV + txtWV / 2
+					+ (p0.getX() - mxOffset.getX());
+
+			//FIXME one file has txtPinX/Y values extremely high which cause draw.io to hang
+			//			<Cell N='TxtPinX' V='-1.651384506429589E199' F='SETATREF(Controls.TextPosition)'/>
+			//			<Cell N='TxtPinY' V='1.183491078740126E185' F='SETATREF(Controls.TextPosition.Y)'/>
+			if (Math.abs(x) > 10e10)
+				return null;
+
+			return new mxPoint(Math.round(x * 100) / 100, Math.round(y * 100) / 100);
+		}
+		else
+		{
+			return null;
+		}
+	}
+
+	public int getShapeIndex()
+	{
+		return shapeIndex;
+	}
+
+	public void setShapeIndex(int shapeIndex)
+	{
+		this.shapeIndex = shapeIndex;
+	}
+
 }

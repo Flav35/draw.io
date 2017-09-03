@@ -39,6 +39,11 @@ mkdir -p build/.sandstorm/client/styles
 cp -rf ../../war/styles/* build/.sandstorm/client/styles/
 mkdir -p build/.sandstorm/client/templates
 cp -rf ../../war/templates/* build/.sandstorm/client/templates/
+
+echo "Compressing assets"
+gfind build/.sandstorm/client -name '*.html' -o -name '*.css' -o -name '*.js' -o -name '*.txt' -o -name '*.xml' | xargs gzip -k
+
 echo "Creating file list"
 cd build/.sandstorm
-gfind . -type f -printf "%p\n" | cut -c 3- >  sandstorm-files.list
+gfind ./client -type f -printf "%p\n" | cut -c 3- >  sandstorm-files.list
+cat ../../rootFiles >> sandstorm-files.list

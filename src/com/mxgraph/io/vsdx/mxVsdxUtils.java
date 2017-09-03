@@ -1,17 +1,20 @@
+/**
+ * Copyright (c) 2006-2016, JGraph Ltd
+ * Copyright (c) 2006-2016, Gaudenz Alder
+ */
 package com.mxgraph.io.vsdx;
 
 import com.mxgraph.util.mxConstants;
-import com.mxgraph.util.mxPoint;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 
 /**
  * General utilities for .vdx format support
@@ -23,128 +26,103 @@ public class mxVsdxUtils
 	private static final double CENTIMETERS_PER_INCHES = 2.54;
 	
 	public static final double conversionFactor = screenCoordinatesPerCm * CENTIMETERS_PER_INCHES;
+	
+	private static final Logger log = Logger.getLogger(mxVsdxUtils.class.getName());
 
 	/**
-	 * Checks if the NodeList has a Node with name = tag.
-	 * @param nl NodeList
-	 * @param tag Name of the node.
-	 * @return Returns <code>true</code> if the Node List has a Node with name = tag.
+	 * Returns a collection of direct child Elements that match the specified tag name
+	 * @param parent the parent whose direct children will be processed
+	 * @param name the child tag name to match
+	 * @return a collection of matching Elements
 	 */
-	public static boolean nodeListHasTag(NodeList nl, String tag)
+	public static ArrayList<Element> getDirectChildNamedElements(Element parent, String name)
 	{
-		boolean has = false;
+		ArrayList<Element> result = new ArrayList<Element>();
 
-		if (nl != null)
+		for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling())
 		{
-			int length = nl.getLength();
-
-			for (int i = 0; (i < length) && !has; i++)
+			if (child instanceof Element && name.equals(child.getNodeName())) 
 			{
-				has = (nl.item(i)).getNodeName().equals(tag);
+				result.add((Element)child);
+			}
+	    }
+
+	    return result;
+	}
+
+	/**
+	 * Returns a collection of direct child Elements
+	 * @param parent the parent whose direct children will be processed
+	 * @return a collection of all child Elements
+	 */
+	public static ArrayList<Element> getDirectChildElements(Element parent)
+	{
+		ArrayList<Element> result = new ArrayList<Element>();
+
+		for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling())
+		{
+			if (child instanceof Element) 
+			{
+				result.add((Element)child);
+			}
+	    }
+
+	    return result;
+	}
+
+	/**
+	 * Returns the first direct child Element
+	 * @param parent the parent whose direct first child will be processed
+	 * @return the first child Element
+	 */
+	public static Element getDirectFirstChildElement(Element parent)
+	{
+		for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling())
+		{
+			if (child instanceof Element) 
+			{
+				return (Element)child;
+			}
+	    }
+
+	    return null;
+	}
+
+	/**
+	 * Return the value of an integer attribute or the default value
+	 * @param elem Element
+	 * @param attName Attribute name
+	 * @param defVal default value
+	 * @return the parsed attribute value or the default value
+	 */
+	public static int getIntAttr(Element elem, String attName, int defVal)
+	{
+		try 
+		{
+			String val = elem.getAttribute(attName);
+			if (val != null)
+			{
+				return Integer.parseInt(val);
 			}
 		}
-
-		return has;
-	}
-
-	/**
-	 * Returns the first Element that has name = tag in Node List.
-	 * @param nl NodeList
-	 * @param tag Name of the Element
-	 * @return Element with name = 'tag'.
-	 */
-	public static Element nodeListTag(NodeList nl, String tag)
-	{
-		if (nl != null)
+		catch (NumberFormatException e) 
 		{
-			int length = nl.getLength();
-			boolean has = false;
-
-			for (int i = 0; (i < length) && !has; i++)
-			{
-				has = (nl.item(i)).getNodeName().equals(tag);
-
-				if (has)
-				{
-					return (Element) nl.item(i);
-				}
-			}
+			//nothing, just return the default value
 		}
-
-		return null;
+		return defVal;
 	}
-
+	
 	/**
-	 * Returns the  Element that has name = tag and Index = ix in Node List.
-	 * @param nl NodeList
-	 * @param tag name of the Element
-	 * @return Element that has name = tag and Index = ix in Node List..
+	 * Return the value of an integer attribute or zero
+	 * @param elem Element
+	 * @param attName Attribute name
+	 * @return the parsed attribute value or zero
 	 */
-	public static Element nodeListTagIndexed(NodeList nl, String tag, String ix)
+	public static int getIntAttr(Element elem, String attName)
 	{
-		if (nl != null)
-		{
-			int length = nl.getLength();
-			boolean has = false;
-
-			for (int i = 0; (i < length) && !has; i++)
-			{
-				has = (nl.item(i)).getNodeName().equals(tag) && ((Element) (nl.item(i))).getAttribute("IX").equals(ix);
-
-				if (has)
-				{
-					return (Element) nl.item(i);
-				}
-			}
-		}
-
-		return null;
+		return getIntAttr(elem, attName, 0);
 	}
-
-	/**
-	 * Returns a list with the elements included in the Node List that have name = tag.
-	 * @param nl NodeList
-	 * @param tag name of the Element.
-	 * @return List with the indicated elements.
-	 */
-	public static List<Element> nodeListTags(NodeList nl, String tag)
-	{
-		ArrayList<Element> ret = new ArrayList<Element>();
-
-		if (nl != null)
-		{
-			int length = nl.getLength();
-
-			for (int i = 0; i < length; i++)
-			{
-				if (tag.equals((nl.item(i)).getNodeName()))
-				{
-					ret.add((Element) nl.item(i));
-				}
-			}
-		}
-
-		return ret;
-	}
-
-	/**
-	 * Map the child of parent using node name as key
-	 * @param parent parent whose children will be mapped
-	 * @return Map of (NodeName, child)
-	 */
-	public static List<Node> copyNodeList(NodeList nodeList)
-	{
-		ArrayList<Node> copy = new ArrayList<Node>();
-		int length = nodeList.getLength();
-
-		for (int i = 0; i < length; i++)
-		{
-			copy.add((Node) nodeList.item(i));
-		}
-
-		return copy;
-	}
-
+	
 	/**
 	 * Returns the string that represents the content of a given style map.
 	 * @param styleMap Map with the styles values
@@ -163,7 +141,15 @@ public class mxVsdxUtils
 
 			if(!key.equals(mxConstants.STYLE_SHAPE) || (!styleMap.get(key).startsWith("image") && !styleMap.get(key).startsWith("rounded=")))
 			{
-				style = style + key + asig;
+				try
+				{
+					style = style + key + asig;
+				}
+				catch (Exception e)
+				{
+					log.log(Level.SEVERE, "mxVsdxUtils.getStyleString," + e.toString() + ",style.length=" + style.length() +
+							",key.length=" + key.length() + ",asig.length=" + asig.length());
+				}
 			}
 
 			style = style + value + ";";
@@ -183,6 +169,20 @@ public class mxVsdxUtils
 		return "<" + tag + ">" + text + "</" + tag + ">";
 	}
 
+	
+	/**
+	 * Converts the ampersand, quote, prime, less-than and greater-than
+	 * characters to their corresponding HTML entities in the given string.
+	 * 
+	 * Note: this is the same method of mxUtils but we cannot use it as it is not compatible with google app engine
+	 */
+	public static String htmlEntities(String text)
+	{
+		return text.replaceAll("&", "&amp;").replaceAll("\"", "&quot;")
+				.replaceAll("'", "&prime;").replaceAll("<", "&lt;")
+				.replaceAll(">", "&gt;");
+	}
+	
 	/**
 	 * Converts the initial letter  of each word in text to uppercase
 	 * @param text Text to be transformed.
@@ -265,43 +265,6 @@ public class mxVsdxUtils
 		return styleMap;
 	}
 
-	/**
-	 * Print a list of mxPoint in the standard output.
-	 * @param list Lis of mxPoint.
-	 */
-	public static void printPointList(List<mxPoint> list)
-	{
-		int i = 0;
-
-		for (mxPoint p : list)
-		{
-			i++;
-			System.out.println("Point " + i + " X=" + p.getX() + ", Y="	+ p.getY());
-		}
-	}
-
-	/**
-	 * Creates an array with the cells contained in the map, ordered according
-	 * the order of the keys in orderList.
-	 * @param orderList List of keys in the order desired.
-	 * @param map Map with the object to be put in the array.
-	 * @return Array with the cells.
-	 */
-	public static Object[] getOrderArray(List<ShapePageId> orderList, HashMap<ShapePageId, Object> map)
-	{
-		int length = orderList.size();
-		Object[] array = new Object[length];
-		int i = 0;
-
-		for (ShapePageId key : orderList)
-		{
-			array[i] = map.get(key);
-			i++;
-		}
-
-		return array;
-	}
-	
 	public static boolean isInsideTriangle(double x, double y, double ax, double ay, double bx, double by, double cx,  double cy)
 	{
 		bx = bx - ax;

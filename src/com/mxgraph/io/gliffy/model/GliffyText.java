@@ -3,12 +3,16 @@ package com.mxgraph.io.gliffy.model;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class GliffyText
-{
+import com.mxgraph.io.gliffy.importer.PostDeserializer;
 
+public class GliffyText implements PostDeserializer.PostDeserializable
+{
 	private String html;
 
 	private String valign;
+	
+	//extracted from html
+	private String halign;
 
 	private String vposition;
 
@@ -21,34 +25,47 @@ public class GliffyText
 	private Integer paddingBottom;
 
 	private Integer paddingTop;
-
-	public double lineTValue;
+	
+	public Double lineTValue = 0.5;//places the text in the middle of the line
 
 	public Integer linePerpValue;
 
+	public String overflow;
+	
+	private boolean forceTopPaddingShift = false;
+	
 	private static Pattern pattern = Pattern.compile("<p(.*?)<\\/p>");
 
-	private static Pattern textAlignPattern = Pattern.compile(
-			".*text-align: ?(left|center|right).*", Pattern.DOTALL);
+	private static Pattern textAlign = Pattern.compile(".*(text-align: ?(left|center|right);).*", Pattern.DOTALL);
 
 	public GliffyText()
 	{
 	}
+	
+	public void postDeserialize() 
+	{
+		halign = getHorizontalTextAlignment();
+		html = replaceParagraphWithDiv(html);
+	}
 
 	public String getHtml()
 	{
-		return replaceParagraphWithDiv(html);
+		return html;
 	}
 
+	//this is never invoked by Gson builder
 	public void setHtml(String html)
 	{
-		this.html = html;
 	}
 
-	public String getStyle()
+	public String getStyle(float x, float y)
 	{
 		StringBuilder sb = new StringBuilder();
 
+		//I hate magic numbers, but -7 seams to fix all text top padding when valign is not middle 
+		int topPaddingShift = 7;
+		
+		//vertical label position
 		if (vposition.equals("above"))
 		{
 			sb.append("verticalLabelPosition=top;").append(
@@ -62,6 +79,9 @@ public class GliffyText
 		else if (vposition.equals("none"))
 		{
 			sb.append("verticalAlign=").append(valign).append(";");
+			
+			if (!forceTopPaddingShift && "middle".equals(valign))
+				topPaddingShift = 0;
 		}
 
 		if (hposition.equals("left"))
@@ -74,18 +94,27 @@ public class GliffyText
 		}
 		else if (hposition.equals("none"))
 		{
-			String hAlign = getHorizontalTextAlignment();
-			if (hAlign != null)
+			if (halign != null)
 			{
-				sb.append("align=").append(hAlign).append(";");
+				sb.append("align=").append(halign).append(";");
 			}
+			else 
+				sb.append("align=center;");
 		}
 
-		sb.append("spacingLeft=").append(paddingLeft).append(";");
+		sb.append("spacingLeft=").append(paddingLeft + x).append(";");
 		sb.append("spacingRight=").append(paddingRight).append(";");
-		sb.append("spacingTop=").append(paddingTop).append(";");
-		sb.append("spacingBottom=").append(paddingBottom).append(";");
+		
+		if (forceTopPaddingShift || !"middle".equals(valign))
+		{
+			sb.append("spacingTop=").append(paddingTop - topPaddingShift + y).append(";");
+			sb.append("spacingBottom=").append(paddingBottom).append(";");
+		}
 
+		//We should wrap only if overflow is none. (TODO better support left & right overflow) 
+		if ("none".equals(overflow))
+			sb.append("whiteSpace=wrap;");
+		
 		return sb.toString();
 	}
 
@@ -101,16 +130,31 @@ public class GliffyText
 		return sb.length() > 0 ? sb.toString() : html;
 	}
 
+	/**
+	 * Extracts horizontal text alignment from html and removes it
+	 * so it does not interfere with alignment set in mxCell style
+	 * @return horizontal text alignment or null if there is none
+	 */
 	private String getHorizontalTextAlignment()
 	{
-		Matcher m = textAlignPattern.matcher(html);
+		Matcher m = textAlign.matcher(html);
 
 		if (m.matches())
 		{
-			return m.group(1);
+			html = html.replaceAll("text-align: ?\\w*;", "");
+			return m.group(2);
 		}
 
 		return null;
 	}
 
+	public void setValign(String valign) 
+	{
+		this.valign = valign;
+	}
+
+	public void setForceTopPaddingShift(boolean forceTopPaddingShift) 
+	{
+		this.forceTopPaddingShift = forceTopPaddingShift;
+	}
 }

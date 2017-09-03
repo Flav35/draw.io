@@ -1,12 +1,6 @@
-// $Id = DropboxFile.js,v 1.12 2010-01-02 09 =45 =14 gaudenz Exp $
-// Copyright (c) 2006-2014, JGraph Ltd
 /**
- * Constructs a new point for the optional x and y coordinates. If no
- * coordinates are given, then the default values for <x> and <y> are used.
- * @constructor
- * @class Implements a basic 2D point. Known subclassers = {@link mxRectangle}.
- * @param {number} x X-coordinate of the point.
- * @param {number} y Y-coordinate of the point.
+ * Copyright (c) 2006-2017, JGraph Ltd
+ * Copyright (c) 2006-2017, Gaudenz Alder
  */
 DropboxFile = function(ui, data, stat)
 {
@@ -26,7 +20,7 @@ mxUtils.extend(DropboxFile, DrawioFile);
  */
 DropboxFile.prototype.getHash = function()
 {
-	return 'D' + encodeURIComponent(this.stat.path.substring(1));
+	return 'D' + encodeURIComponent(this.stat.path_display.substring(1));
 };
 
 /**
@@ -100,7 +94,11 @@ DropboxFile.prototype.saveAs = function(title, success, error)
  */
 DropboxFile.prototype.doSave = function(title, success, error)
 {
+	// Forces update of data for new extensions
+	var prev = this.stat.name;
+	this.stat.name = title;
 	DrawioFile.prototype.save.apply(this, arguments);
+	this.stat.name = prev;
 	
 	this.saveFile(title, false, success, error);
 };
@@ -131,36 +129,71 @@ DropboxFile.prototype.saveFile = function(title, revision, success, error)
 				// Makes sure no changes get lost while the file is saved
 				var prevModified = this.isModified;
 				var modified = this.isModified();
-				this.setModified(false);
-				
-				this.isModified = function()
+
+				var prepare = mxUtils.bind(this, function()
 				{
-					return modified;
-				};
-				
-				this.ui.dropbox.saveFile(title, this.getData(), mxUtils.bind(this, function(stat)
-				{
-					this.savingFile = false;
-					this.isModified = prevModified;
-					this.stat = stat;
-					this.contentChanged();
+					this.setModified(false);
 					
-					if (success != null)
+					this.isModified = function()
 					{
-						success();
-					}
-				}),
-				mxUtils.bind(this, function(resp)
+						return modified;
+					};
+				});
+				
+				prepare();
+				
+				var doSave = mxUtils.bind(this, function(data)
 				{
-					this.savingFile = false;
-					this.isModified = prevModified;
-					this.setModified(modified || this.isModified());
+					var index = this.stat.path_display.lastIndexOf('/');
+					var folder = (index > 1) ? this.stat.path_display.substring(1, index + 1) : null;
 					
-					if (error != null)
+					this.ui.dropbox.saveFile(title, data, mxUtils.bind(this, function(stat)
 					{
-						error(resp);
-					}
-				}));
+						this.savingFile = false;
+						this.isModified = prevModified;
+						this.stat = stat;
+						this.contentChanged();
+						
+						if (success != null)
+						{
+							success();
+						}
+					}), mxUtils.bind(this, function(err)
+					{
+						this.savingFile = false;
+						this.isModified = prevModified;
+						this.setModified(modified || this.isModified());
+						
+						if (error != null)
+						{
+							// Handles modified state for retries
+							if (err != null && err.retry != null)
+							{
+								var retry = err.retry;
+								
+								err.retry = function()
+								{
+									prepare();
+									retry();
+								};
+							}
+							
+							error(err);
+						}
+					}), folder);
+				});
+				
+				if (this.ui.useCanvasForExport && /(\.png)$/i.test(this.getTitle()))
+				{
+					this.ui.getEmbeddedPng(mxUtils.bind(this, function(data)
+					{
+						doSave(this.ui.base64ToBlob(data, 'image/png'));
+					}), error, (this.ui.getCurrentFile() != this) ? this.getData() : null);
+				}
+				else
+				{
+					doSave(this.getData());
+				}
 			}
 			else if (error != null)
 			{

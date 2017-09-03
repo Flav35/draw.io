@@ -16,6 +16,27 @@
 function DiagramPage(node)
 {
 	this.node = node;
+	
+	// Create GUID for page (first part is workaround for old versions of IE)
+	if ((this.node.hasAttribute == null && this.node.getAttribute('id') == null) ||
+		(this.node.hasAttribute != null && !this.node.hasAttribute('id')))
+	{
+		// Make global if used anywhere else
+		function guid()
+		{
+		  function s4()
+		  {
+		    return Math.floor((1 + Math.random()) * 0x10000)
+		      .toString(16)
+		      .substring(1);
+		  }
+		  
+		  return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
+		    s4() + '-' + s4() + s4() + s4();
+		};
+		
+		this.node.setAttribute('id', guid());
+	}
 }
 
 /**
@@ -32,6 +53,14 @@ DiagramPage.prototype.root = null;
  * Holds the view state for the page.
  */
 DiagramPage.prototype.viewState = null;
+
+/**
+ * 
+ */
+DiagramPage.prototype.getId = function()
+{
+	return this.node.getAttribute('id');
+};
 
 /**
  * 
@@ -119,9 +148,11 @@ function SelectPage(ui, page)
 	this.ui = ui;
 	this.page = page;
 	this.previousPage = page;
+	this.neverShown = true;
 	
 	if (page != null)
 	{
+		this.neverShown = page.viewState == null;
 		this.ui.updatePageRoot(page);
 	}
 };
@@ -131,7 +162,9 @@ function SelectPage(ui, page)
  */
 SelectPage.prototype.execute = function()
 {
-	if (this.page != null && mxUtils.indexOf(this.ui.pages, this.previousPage) >= 0)
+	var prevIndex = mxUtils.indexOf(this.ui.pages, this.previousPage);
+	
+	if (this.page != null && prevIndex >= 0)
 	{
 		var page = this.ui.currentPage;
 		var editor = this.ui.editor;
@@ -142,6 +175,12 @@ SelectPage.prototype.execute = function()
 		mxUtils.setTextContent(page.node, data);
 		page.viewState = graph.getViewState();
 		page.root = graph.model.root;
+		
+		// Transitions for switching pages
+//		var curIndex = mxUtils.indexOf(this.ui.pages, page);
+//		mxUtils.setPrefixedStyle(graph.view.canvas.style, 'transition', null);
+//		mxUtils.setPrefixedStyle(graph.view.canvas.style, 'transform',
+//			(curIndex > prevIndex) ? 'translate(-50%,0)' : 'translate(50%,0)');
 		
 		// Removes the previous cells and clears selection
 		graph.view.clear(page.root, true);
@@ -167,6 +206,15 @@ SelectPage.prototype.execute = function()
 		editor.updateGraphComponents();
 		graph.view.validate();
 		graph.sizeDidChange();
+		
+//		mxUtils.setPrefixedStyle(graph.view.canvas.style, 'transition', 'transform 0.2s');
+//		mxUtils.setPrefixedStyle(graph.view.canvas.style, 'transform', 'translate(0,0)');
+		
+		if (this.neverShown)
+		{
+			this.neverShown = false;
+			graph.selectUnlockedLayer();
+		}
 		
 		// Fires events
 		editor.graph.fireEvent(new mxEventObject(mxEvent.ROOT));
@@ -216,6 +264,25 @@ ChangePage.prototype.execute = function()
 /**
  * Returns true if the given string contains an mxfile.
  */
+EditorUi.prototype.getPageById = function(id)
+{
+	if (this.pages != null)
+	{
+		for (var i = 0; i < this.pages.length; i++)
+		{
+			if (this.pages[i].getId() == id)
+			{
+				return this.pages[i];
+			}
+		}
+	}
+	
+	return null;
+};
+
+/**
+ * Returns true if the given string contains an mxfile.
+ */
 EditorUi.prototype.initPages = function()
 {
 	this.actions.addAction('previousPage', mxUtils.bind(this, function()
@@ -228,8 +295,8 @@ EditorUi.prototype.initPages = function()
 		this.selectNextPage(true);
 	}));
 	
-	this.keyHandler.bindAction(33, true, 'previousPage'); // Ctrl+PageUp
-	this.keyHandler.bindAction(34, true, 'nextPage'); // Ctrl+PageDown
+	this.keyHandler.bindAction(33, true, 'previousPage', true); // Ctrl+Shift+PageUp
+	this.keyHandler.bindAction(34, true, 'nextPage', true); // Ctrl+Shift+PageDown
 	
 	// Updates the tabs after loading the diagram
 	var graph = this.editor.graph;
@@ -242,7 +309,7 @@ EditorUi.prototype.initPages = function()
 			var prevHeight = this.tabContainer.style.height;
 			
 			if (this.fileNode == null || this.pages == null ||
-				(this.pages.length == 1 && urlParams['pages'] != '1'))
+				(this.pages.length == 1 && urlParams['pages'] == '0'))
 			{
 				this.tabContainer.style.height = '0px';
 			}
@@ -276,8 +343,8 @@ EditorUi.prototype.initPages = function()
 			if (p.viewState == null || p.viewState.scrollLeft == null)
 			{
 				this.resetScrollbars();
-				
-				if (this.editor.graph.lightbox)
+
+				if (graph.lightbox)
 				{
 					this.lightboxFit();
 				}
@@ -291,12 +358,8 @@ EditorUi.prototype.initPages = function()
 			}
 			else
 			{
-				// Takes into account resized window
-				var dx = (p.viewState.translate != null) ? p.viewState.translate.x - graph.view.translate.x : 0;
-				var dy = (p.viewState.translate != null) ? p.viewState.translate.y - graph.view.translate.y : 0;
-				
-				graph.container.scrollLeft = p.viewState.scrollLeft - dx * graph.view.scale;
-				graph.container.scrollTop = p.viewState.scrollTop - dy * graph.view.scale;
+				graph.container.scrollLeft = graph.view.translate.x * graph.view.scale + p.viewState.scrollLeft;
+				graph.container.scrollTop = graph.view.translate.y * graph.view.scale + p.viewState.scrollTop;
 			}
 			
 			lastPage = p;
@@ -356,6 +419,12 @@ EditorUi.prototype.initPages = function()
 			}
 		}
 	}));
+	
+	// Updates zoom in toolbar
+	if (this.toolbar != null)
+	{
+		this.editor.addListener('pageSelected', this.toolbar.updateZoom);
+	}
 };
 
 /**
@@ -386,6 +455,7 @@ Graph.prototype.createViewState = function(node)
 				parseFloat(pw), parseFloat(ph)) : this.pageFormat,
 		tooltips: node.getAttribute('tooltips') != '0',
 		connect: node.getAttribute('connect') != '0',
+		arrows: node.getAttribute('arrows') != '0',
 		mathEnabled: node.getAttribute('math') != '0',
 		selectionCells: null,
 		defaultParent: null,
@@ -414,11 +484,12 @@ Graph.prototype.getViewState = function()
 		backgroundImage: this.backgroundImage,
 		pageScale: this.pageScale,
 		pageFormat: this.pageFormat,
-		tooltips: this.tooltipHandler.isEnabled() ? '1' : '0',
-		connect: this.connectionHandler.isEnabled() ? '1' : '0',	
+		tooltips: this.tooltipHandler.isEnabled(),
+		connect: this.connectionHandler.isEnabled(),
+		arrows: this.connectionArrowsEnabled,
 		scale: this.view.scale,
-		scrollLeft: this.container.scrollLeft,
-		scrollTop: this.container.scrollTop,
+		scrollLeft: this.container.scrollLeft - this.view.translate.x * this.view.scale,
+		scrollTop: this.container.scrollTop - this.view.translate.y * this.view.scale,
 		translate: this.view.translate.clone(),
 		lastPasteXml: this.lastPasteXml,
 		pasteCounter: this.pasteCounter,
@@ -451,25 +522,53 @@ Graph.prototype.setViewState = function(state)
 		this.view.scale = state.scale;
 		this.view.currentRoot = state.currentRoot;
 		this.defaultParent = state.defaultParent;
+		this.connectionArrowsEnabled = state.arrows;
 		this.setTooltips(state.tooltips);
 		this.setConnectable(state.connect);
+		
+		// Checks if current root or default parent have been removed
+		if (!this.model.contains(this.view.currentRoot))
+		{
+			this.view.currentRoot = null;
+		}
+		
+		if (!this.model.contains(this.defaultParent))
+		{
+			this.setDefaultParent(null);
+			this.selectUnlockedLayer();
+		}
 		
 		if (state.translate != null)
 		{
 			this.view.translate = state.translate;
 		}
-
-		// Implicit settings
-		this.pageBreaksVisible = this.pageVisible; 
-		this.preferPageSize = this.pageVisible;
 	}
 	else
 	{
 		this.view.currentRoot = null;
+		this.view.scale = 1;
+		this.gridEnabled = true;
+		this.gridSize = mxGraph.prototype.gridSize;
+		this.pageScale = mxGraph.prototype.pageScale;
+		this.pageFormat = mxSettings.getPageFormat();
+		this.pageVisible = this.defaultPageVisible;
+		this.background = this.defaultGraphBackground;
+		this.backgroundImage = null;
+		this.scrollbars = this.defaultScrollbars;
+		this.graphHandler.guidesEnabled = true;
+		this.foldingEnabled = true;
+		this.defaultParent = null;
+		this.setTooltips(true);
+		this.setConnectable(true);
 		this.lastPasteXml = null;
 		this.pasteCounter = 0;
 		this.mathEnabled = false;
+		this.connectionArrowsEnabled = true;
 	}
+	
+	// Implicit settings
+	this.pageBreaksVisible = this.pageVisible; 
+	this.preferPageSize = this.pageVisible;
 };
 
 /**
@@ -503,9 +602,11 @@ EditorUi.prototype.updatePageRoot = function(page)
 /**
  * Returns true if the given string contains an mxfile.
  */
-EditorUi.prototype.selectPage = function(page)
+EditorUi.prototype.selectPage = function(page, quiet)
 {
-	this.editor.graph.stopEditing();
+	quiet = (quiet != null) ? quiet : false;
+	this.editor.graph.isMouseDown = false;
+	this.editor.graph.reset();
 	
 	var edit = this.editor.graph.model.createUndoableEdit();
 	
@@ -517,7 +618,10 @@ EditorUi.prototype.selectPage = function(page)
 	edit.add(change);
 	edit.notify();
 	
-	this.editor.graph.model.fireEvent(new mxEventObject(mxEvent.UNDO, 'edit', edit));
+	if (!quiet)
+	{
+		this.editor.graph.model.fireEvent(new mxEventObject(mxEvent.UNDO, 'edit', edit));
+	}
 };
 
 /**
@@ -531,13 +635,13 @@ EditorUi.prototype.selectNextPage = function(forward)
 	{
 		var tmp = mxUtils.indexOf(this.pages, next);
 		
-		if (forward && tmp < this.pages.length - 1)
+		if (forward)
 		{
-			this.selectPage(this.pages[tmp + 1]);
+			this.selectPage(this.pages[mxUtils.mod(tmp + 1, this.pages.length)]);
 		}
-		else if (!forward && tmp > 0)
+		else if (!forward)
 		{
-			this.selectPage(this.pages[tmp - 1]);
+			this.selectPage(this.pages[mxUtils.mod(tmp - 1, this.pages.length)]);
 		}
 	}
 };
@@ -664,9 +768,23 @@ EditorUi.prototype.duplicatePage = function(page, name)
 	
 	if (graph.isEnabled())
 	{
-		// Clones the current page and takes a snapshot of the graph model
-		var newPage = new DiagramPage(page.node.cloneNode(false));
+		if (graph.isEditing())
+		{
+			graph.stopEditing();
+		}
+		
+		// Clones the current page and takes a snapshot of the graph model and view state
+		var node = page.node.cloneNode(false);
+		node.removeAttribute('id');
+		
+		var newPage = new DiagramPage(node);
 		newPage.root = graph.cloneCells([graph.model.root])[0];
+		newPage.viewState = graph.getViewState();
+		
+		// Resets zoom and scrollbar positions
+		newPage.viewState.scale = 1;
+		newPage.viewState.scrollLeft = null;
+		newPage.viewState.scrollRight = null;
 		newPage.setName(name);
 		
 		newPage = this.insertPage(newPage, mxUtils.indexOf(this.pages, page) + 1);
@@ -685,12 +803,12 @@ EditorUi.prototype.renamePage = function(page)
 	if (graph.isEnabled())
 	{
 		var dlg = new FilenameDialog(this, page.getName(), mxResources.get('rename'), mxUtils.bind(this, function(name)
-	{
-		if (name != null && name.length > 0)
 		{
-			this.editor.graph.model.execute(new RenamePage(this, page, name));
-		}
-	}), mxResources.get('rename'));
+			if (name != null && name.length > 0)
+			{
+				this.editor.graph.model.execute(new RenamePage(this, page, name));
+			}
+		}), mxResources.get('rename'));
 		this.showDialog(dlg.container, 300, 80, true, true);
 		dlg.init();
 	}
@@ -765,6 +883,13 @@ EditorUi.prototype.updateTabContainer = function()
 				{
 					if (graph.isEnabled())
 					{
+						// Workaround for no DnD on DIV in FF
+						if (mxClient.IS_FF)
+						{
+							// LATER: Check what triggers a parse as XML on this in FF after drop
+							evt.dataTransfer.setData('Text', '<diagram/>');
+						}
+						
 						startIndex = index;
 					}
 					else
@@ -975,6 +1100,30 @@ EditorUi.prototype.createPageMenuTab = function()
 				{
 					this.insertPage();
 				}), parent);
+
+				var page = this.currentPage;
+				
+				if (page != null)
+				{
+					menu.addSeparator(parent);
+	
+					menu.addItem(mxResources.get('delete'), null, mxUtils.bind(this, function()
+					{
+						this.removePage(page);
+					}), parent);
+					
+					menu.addItem(mxResources.get('rename'), null, mxUtils.bind(this, function()
+					{
+						this.renamePage(page, page.getName());
+					}), parent);
+					
+					menu.addSeparator(parent);
+					
+					menu.addItem(mxResources.get('duplicate'), null, mxUtils.bind(this, function()
+					{
+						this.duplicatePage(page, mxResources.get('copyOf', [page.getName()]));
+					}), parent);
+				}
 			}
 		}));
 		
@@ -1065,6 +1214,7 @@ EditorUi.prototype.addTabListeners = function(page, tab)
 	
 	mxEvent.addGestureListeners(tab, mxUtils.bind(this, function(evt)
 	{
+		// Do not consume event here to allow for drag and drop of tabs
 		menuWasVisible = this.currentMenu != null;
 		pageWasActive = page == this.currentPage;
 		

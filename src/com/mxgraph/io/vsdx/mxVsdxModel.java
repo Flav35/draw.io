@@ -54,7 +54,12 @@ public class mxVsdxModel {
 	/**
 	 * Map stylesheets indexed by their ID
 	 */
-	protected Map<String, mxStyleSheet> stylesheets = new HashMap<String, mxStyleSheet>();
+	protected Map<String, Style> stylesheets = new HashMap<String, Style>();
+	
+	/**
+	 * Map themes indexed by their index
+	 */
+	protected Map<Integer, mxVsdxTheme> themes = new HashMap<>();	
 	
 	mxPropertiesManager pm;
 
@@ -79,8 +84,65 @@ public class mxVsdxModel {
 		this.pm = new mxPropertiesManager();
 		this.pm.initialise(rootElement, this);
 		initStylesheets();
+		initThemes();
 		initMasters();
 		initPages();
+	}
+
+	/**
+	 * Initialize theme objects from the XML files
+	 */
+	private void initThemes() 
+	{
+		// Lazy build up the master structure
+		if (this.xmlDocs != null)
+		{
+			boolean more = true;
+			int index = 1;
+			
+			while (more)
+			{
+				String path = mxVsdxCodec.vsdxPlaceholder + "/theme/theme"+ index +".xml";
+				Document themeDoc = this.xmlDocs.get(path);
+	
+				if (themeDoc != null)
+				{
+					Node child = themeDoc.getFirstChild();
+					
+					while (child != null)
+					{
+						if (child instanceof Element && ((Element)child).getTagName().equals("a:theme"))
+						{
+							mxVsdxTheme theme = new mxVsdxTheme((Element) child);
+							
+							
+							if (theme.getThemeIndex() < 0)
+							{
+								//theme index cannot be determined unless the theme is parsed
+								theme.processTheme();
+							}
+							
+							//TODO having two theme files with the same id still requires more handling
+							//		probably we need to merge the similar parts (has same theme name)
+							mxVsdxTheme existingTheme = themes.get(theme.getThemeIndex());
+							if (existingTheme == null || !existingTheme.isPure())
+							{
+								themes.put(theme.getThemeIndex(), theme);
+							}
+							
+							break;
+						}
+						
+						child = child.getNextSibling();
+					}
+					index++;
+				}
+				else
+				{
+					more = false;
+				}
+			}
+		}
 	}
 
 	/**
@@ -102,17 +164,17 @@ public class mxVsdxModel {
 			{
 				Element sheet = (Element) sheetList.item(i);
 				String sheetId = sheet.getAttribute(mxVsdxConstants.ID);
-				mxStyleSheet sheetElement = new mxStyleSheet(sheet, this);
+				Style sheetElement = new Style(sheet, this);
 				stylesheets.put(sheetId, sheetElement);
 			}
 		}
 		
-		Collection <mxStyleSheet> sheets = stylesheets.values();
-		Iterator<mxStyleSheet> iter = sheets.iterator();
+		Collection <Style> sheets = stylesheets.values();
+		Iterator<Style> iter = sheets.iterator();
 		
 		while (iter.hasNext())
 		{
-			mxStyleSheet sheet = iter.next();
+			Style sheet = iter.next();
 			sheet.stylesheetRefs(this);
 		}
 	}
@@ -204,13 +266,10 @@ public class mxVsdxModel {
 								this.pages.put(page.getId(), page);
 							}
 		
-							Collection<mxVsdxPage> pagesCollection = this.pages.values();
-							Iterator<mxVsdxPage> iter = pagesCollection.iterator();
-		
 							// Iterate again, assigning background pages
-							while (iter.hasNext())
+							for (Map.Entry<Integer, mxVsdxPage> entry : this.pages.entrySet())
 							{
-								mxVsdxPage page = iter.next();
+								mxVsdxPage page = entry.getValue();
 		
 								if (!page.isBackground())
 								{
@@ -238,6 +297,11 @@ public class mxVsdxModel {
 	public Map<Integer, mxVsdxPage> getPages()
 	{
 		return this.pages;
+	}
+
+	public Map<Integer, mxVsdxTheme> getThemes()
+	{
+		return this.themes;
 	}
 
 	protected Element getRelationship(String rid, String path)
@@ -297,7 +361,7 @@ public class mxVsdxModel {
 	 * @param id StyleSheet's ID.
 	 * @return StyleSheet element with id = 'id' wrapped in an instance of mxStyleSheet.
 	 */
-	public mxStyleSheet getStylesheet(String id)
+	public Style getStylesheet(String id)
 	{
 		return stylesheets.get(id);
 	}

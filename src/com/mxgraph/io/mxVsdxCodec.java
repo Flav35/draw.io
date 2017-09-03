@@ -1,56 +1,79 @@
 /**
- * Copyright (c) 2006-2016, JGraph Ltd
- * Copyright (c) 2006-2016, Gaudenz Alder
+ * Copyright (c) 2006-2017, JGraph Ltd
+ * Copyright (c) 2006-2017, Gaudenz Alder
  */
 package com.mxgraph.io;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+import javax.imageio.ImageIO;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
 
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.codec.binary.StringUtils;
+import org.apache.commons.lang3.StringEscapeUtils;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.SAXException;
 
+import com.google.appengine.api.images.Image;
+import com.google.appengine.api.images.ImagesService;
+import com.google.appengine.api.images.ImagesService.OutputEncoding;
+import com.google.appengine.api.images.ImagesServiceFactory;
+import com.google.appengine.api.images.Transform;
+import com.google.appengine.api.utils.SystemProperty;
 import com.mxgraph.io.vsdx.ShapePageId;
 import com.mxgraph.io.vsdx.VsdxShape;
-import com.mxgraph.io.vsdx.mxMasterShape;
 import com.mxgraph.io.vsdx.mxPathDebug;
 import com.mxgraph.io.vsdx.mxVsdxConnect;
 import com.mxgraph.io.vsdx.mxVsdxConstants;
+import com.mxgraph.io.vsdx.mxVsdxGeometryList;
 import com.mxgraph.io.vsdx.mxVsdxMaster;
-import com.mxgraph.io.vsdx.mxVsdxUtils;
 import com.mxgraph.io.vsdx.mxVsdxModel;
 import com.mxgraph.io.vsdx.mxVsdxPage;
+import com.mxgraph.io.vsdx.mxVsdxUtils;
 import com.mxgraph.model.mxCell;
 import com.mxgraph.model.mxGeometry;
+import com.mxgraph.model.mxGraphModel;
+import com.mxgraph.model.mxICell;
+import com.mxgraph.model.mxIGraphModel;
 import com.mxgraph.online.Utils;
+import com.mxgraph.online.mxBase64;
 import com.mxgraph.util.mxConstants;
 import com.mxgraph.util.mxPoint;
+import com.mxgraph.util.mxRectangle;
 import com.mxgraph.util.mxXmlUtils;
-import com.mxgraph.view.mxCellState;
 import com.mxgraph.view.mxConnectionConstraint;
 import com.mxgraph.view.mxGraph;
+import com.mxgraph.view.mxGraphHeadless;
 
 /**
- * Parses a .vdx XML diagram file and imports it in the given graph.<br/>
+ * Parses a .vsdx XML diagram file and imports it in the given graph.<br/>
  */
 public class mxVsdxCodec
 {
+	protected String RESPONSE_END = "</mxfile>";
+
+	protected String RESPONSE_DIAGRAM_START = "";
+	protected String RESPONSE_DIAGRAM_END = "</diagram>";
+
+	protected String RESPONSE_HEADER = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><mxfile>";
+
 	/**
 	 * Stores the vertexes imported.
 	 */
@@ -72,18 +95,6 @@ public class mxVsdxCodec
 	protected HashMap<ShapePageId, Object> parentsMap = new HashMap<ShapePageId, Object>();
 
 	/**
-	 * Number of pages imported until now.<br/>
-	 * This number is used in the keys of the maps.
-	 */
-	protected int pageNumber = 0;
-
-	/**
-	 * Page Height used in the importPage method
-	 * This value is accumulated to represent multiple pages.
-	 */
-	protected double yOffset = 0;
-
-	/**
 	 * Set to true if you want to display spline debug data
 	 */
 	protected boolean debugPaths = false;
@@ -92,6 +103,8 @@ public class mxVsdxCodec
 	 * Do not remove, ask David
 	 */
 	public static String vsdxPlaceholder = new String(Base64.decodeBase64("dmlzaW8="));
+
+	protected mxVsdxModel vsdxModel;
 	
 	public mxVsdxCodec()
 	{
@@ -104,17 +117,17 @@ public class mxVsdxCodec
 	 * @param point Point to which coordinates are calculated.
 	 * @return The point in absolute coordinates.
 	 */
-	private static mxPoint calculateAbsolutePoint(mxCell cellParent,
+	private static mxPoint calculateAbsolutePoint(Object cellParent,
 			mxGraph graph, mxPoint point)
 	{
 		if (cellParent != null)
 		{
-			mxCellState state = graph.getView().getState(cellParent);
+			mxGeometry geo = graph.getModel().getGeometry(cellParent);
 
-			if (state != null)
+			if (geo != null) 
 			{
-				point.setX(point.getX() + state.getX());
-				point.setY(point.getY() + state.getY());
+				point.setX(point.getX() + geo.getX());
+				point.setY(point.getY() + geo.getY());				
 			}
 		}
 
@@ -125,13 +138,12 @@ public class mxVsdxCodec
 	 * Parses the input VSDX format and uses the information to populate 
 	 * the specified graph.
 	 * @param docs All XML documents contained in the VSDX source file
-	 * @param graph Graph to be populated
 	 * @throws IOException 
 	 * @throws ParserConfigurationException 
 	 * @throws SAXException 
 	 * @throws TransformerException 
 	 */
-	public void decodeVsdx(byte[] data, mxGraph graph, String charset)
+	public String decodeVsdx(byte[] data, String charset)
 			throws IOException, ParserConfigurationException, SAXException,
 			TransformerException
 	{
@@ -153,22 +165,105 @@ public class mxVsdxCodec
 				if (filename.toLowerCase().endsWith(".xml") | filename
 							.toLowerCase().endsWith(".xml.rels"))
 				{
-					Document doc = mxXmlUtils.parseXml(out.toString(charset));
-					// Hack to be able to find the filename from an element in the XML
-					doc.setDocumentURI(filename);
-					docData.put(filename, doc);
+					String str = out.toString(charset);
+					if (!str.isEmpty())
+					{
+						//UTF-8 BOM causes exception while parsing, so remove it
+						//TODO is the text encoding will be correct or string must be re-read as UTF-8?
+						if (str.startsWith("ï»¿")) str = str.substring(3);
+						
+						Document doc = mxXmlUtils.parseXml(str);
+						
+						if (doc == null) //An exception that is most probably due to encoding issues
+						{
+							byte[] outBytes = out.toByteArray();
+							if (outBytes[1] == 0 && outBytes[3] == 0 && outBytes[5] == 0) //UTF-16 Little Endian (has a null every other character) [Heuristic]
+							{
+								str = out.toString("UTF-16LE");
+								doc = mxXmlUtils.parseXml(str);
+							}
+							//TODO add any other non-standard encoding that may be needed 
+						}
+						
+						// Hack to be able to find the filename from an element in the XML
+						doc.setDocumentURI(filename);
+						docData.put(filename, doc);
+					}
 				}
 				else if (filename.toLowerCase().startsWith(mxVsdxCodec.vsdxPlaceholder + "/media"))
 				{
-					mediaData.put(filename, StringUtils.newStringUtf8(Base64.encodeBase64(out.toByteArray(), false)));
+					String base64Str = "";
+					//Some BMP images are huge and doesn't show up in the browser, so, it is better to compress it as PNG 
+					if (filename.toLowerCase().endsWith(".bmp")) 
+					{
+						try 
+						{
+							String environ = SystemProperty.environment.get();
+
+							if (environ.equals("Production") || environ.equals("Development"))
+							{
+								ImagesService imagesService = ImagesServiceFactory.getImagesService();
+								
+								Image image = ImagesServiceFactory.makeImage(out.toByteArray());
+
+								//dummy transform
+								Transform transform = ImagesServiceFactory.makeCrop(0.0, 0.0, 1.0, 1.0);
+
+								//Use PNG format as it is lossless similar to BMP but compressed
+								Image newImage = imagesService.applyTransform(transform, image, OutputEncoding.PNG);
+
+								base64Str = StringUtils.newStringUtf8(Base64.encodeBase64(newImage.getImageData(), false));
+							}
+							else
+							{
+								//Use ImageIO as it is normally available in other servlet containers (e.g.; Tomcat)
+								ByteArrayInputStream bis = new ByteArrayInputStream(out.toByteArray());
+								ByteArrayOutputStream bos = new ByteArrayOutputStream();
+								
+								BufferedImage image = ImageIO.read(bis);
+								ImageIO.write(image, "PNG", bos);
+								
+								base64Str = StringUtils.newStringUtf8(Base64.encodeBase64(bos.toByteArray(), false));
+							}
+						}
+						catch (Exception e) 
+						{
+							//conversion failed, nothing we can do!
+							base64Str = StringUtils.newStringUtf8(Base64.encodeBase64(out.toByteArray(), false));
+						}
+					}
+					else if (filename.toLowerCase().endsWith(".emf")) //extract jpg or png images from emf file 
+					{
+						byte[] emfData = out.toByteArray();
+						boolean imageFound = false;
+						//search for jpg or png header
+						for (int i = 0; i < emfData.length - 8; i++) //we subtract 8 from the length to be safe when testing image headers
+						{
+							if (isPng(emfData, i) || isJpg(emfData, i)) //png or jpg?
+							{
+								//although the resulting file is larger than the actual image but any extra bytes after the image are ignored
+								base64Str = StringUtils.newStringUtf8(Base64.encodeBase64(Arrays.copyOfRange(emfData, i, emfData.length), false));
+								imageFound = true;
+								break;
+							}
+							
+						}
+						if (!imageFound)
+						{
+							base64Str = StringUtils.newStringUtf8(Base64.encodeBase64(out.toByteArray(), false));
+						}
+					}
+					else
+					{
+						base64Str = StringUtils.newStringUtf8(Base64.encodeBase64(out.toByteArray(), false));
+					}
+
+					mediaData.put(filename, base64Str);
 				}
 			}
 		}
 
 		zis.close();
-
-		graph.getModel().beginUpdate();
-		graph.setHtmlLabels(true);
 
 		String path = mxVsdxCodec.vsdxPlaceholder + "/document.xml";
 		Document rootDoc = docData.get(path);
@@ -186,27 +281,183 @@ public class mxVsdxCodec
 		else
 		{
 			// TODO log error
-			return;
+			return null;
 		}
 
-		mxVsdxModel vsdxModel = new mxVsdxModel(rootDoc, docData, mediaData);
+		vsdxModel = new mxVsdxModel(rootDoc, docData, mediaData);
 
 		//Imports each page of the document.
 		Map<Integer, mxVsdxPage> pages = vsdxModel.getPages();
 
-		Collection<mxVsdxPage> pagesCollection = pages.values();
-		Iterator<mxVsdxPage> iter = pagesCollection.iterator();
+		StringBuilder xmlBuilder = new StringBuilder(RESPONSE_HEADER);
 
-		while (iter.hasNext())
+		for (Map.Entry<Integer, mxVsdxPage> entry : pages.entrySet())
 		{
-			mxVsdxPage page = iter.next();
-			double pageHeight = importPage(page, graph);
-			this.yOffset += pageHeight;
+			mxVsdxPage page = entry.getValue();
+			
+			if (!page.isBackground())
+			{
+				mxGraph graph = createMxGraph();
+				
+				graph.getModel().beginUpdate();
+				importPage(page, graph, graph.getDefaultParent());
+				
+				mxVsdxPage backPage = page.getBackPage();
+				
+				if (backPage != null)
+				{
+					graph.getModel().setValue(graph.getDefaultParent(), page.getPageName());
+					Object backCell = new mxCell(backPage.getPageName());
+					graph.addCell(backCell, graph.getModel().getRoot(), 0, null, null);
+					importPage(backPage, graph, graph.getDefaultParent());
+				}
+				
+				//scale page 
+				double scale = page.getPageScale() / page.getDrawingScale();
+				
+				if (scale != 1)
+				{
+					mxGraphModel model = (mxGraphModel)graph.getModel();
+	
+					for (Object c : model.getCells().values()) 
+					{
+						mxGeometry geo = model.getGeometry(c);
+						
+						if (geo != null) 
+						{
+							scaleRect(geo, scale);
+							scaleRect(geo.getAlternateBounds(), scale);
+							
+							if (model.isEdge(c)) 
+							{
+								//scale edge waypoints, offset, ...
+								scalePoint(geo.getSourcePoint(), scale);
+								scalePoint(geo.getTargetPoint(), scale);
+								scalePoint(geo.getOffset(), scale);
+								List<mxPoint> points = geo.getPoints();
+								
+								if (points != null) 
+								{
+									for (mxPoint p : points) 
+									{
+										scalePoint(p, scale);
+									}
+								}
+							}
+						}
+					}
+				}
+				
+				graph.getModel().endUpdate();
+				
+				xmlBuilder.append(RESPONSE_DIAGRAM_START);
+				xmlBuilder.append(processPage(graph, page));
+				xmlBuilder.append(RESPONSE_DIAGRAM_END);
+			}
 		}
 
-		graph.getModel().endUpdate();
+		xmlBuilder.append(RESPONSE_END);
+		
+		return xmlBuilder.toString();
 	}
 
+	protected mxGraph createMxGraph() {
+		mxGraph graph = new mxGraphHeadless();
+		//Disable parent (groups) auto extend feature as it miss with the coordinates of vsdx format
+		graph.setExtendParents(false);
+		graph.setExtendParentsOnAdd(false);
+		
+		graph.setConstrainChildren(false);
+		graph.setHtmlLabels(true);
+		//Prevent change of edge parent as it misses with the routing points
+		((mxGraphModel)graph.getModel()).setMaintainEdgeParent(false);
+		return graph;
+	}
+
+	protected String processPage(mxGraph graph, mxVsdxPage page) throws IOException
+	{
+		mxCodec codec = new mxCodec();
+		Node node = codec.encode(graph.getModel());
+		((Element) node).setAttribute("style", "default-style2");
+		String modelString = mxXmlUtils.getXml(node);
+		String modelAscii = Utils.encodeURIComponent(modelString, Utils.CHARSET_FOR_URL_ENCODING);
+		byte[] modelBytes= Utils.deflate(modelAscii);
+		
+		StringBuilder output = new StringBuilder();
+		
+		if (page != null)
+		{
+			String pageName = StringEscapeUtils.escapeXml11(page.getPageName());
+			output.append("<diagram name=\""); 
+			output.append(pageName);
+			output.append("\">");
+		}
+		output.append(mxBase64.encodeToString(modelBytes, false));
+		
+		return  output.toString();
+	}
+	
+	private boolean isJpg(byte[] emfData, int i) 
+	{
+		//the loop calling this function make sure that we still have 3 bytes in the buffer
+		return emfData[i  ] == (byte) 0xFF && emfData[i+1] == (byte) 0xD8 &&
+			   emfData[i+2] == (byte) 0xFF;
+	}
+
+	private boolean isPng(byte[] emfData, int i) 
+	{
+		//the loop calling this function make sure that we still have 8 bytes in the buffer
+		return emfData[i  ] == (byte) 0x89 && emfData[i+1] == (byte) 0x50 &&
+			   emfData[i+2] == (byte) 0x4E && emfData[i+3] == (byte) 0x47 &&
+			   emfData[i+4] == (byte) 0x0D && emfData[i+5] == (byte) 0x0A &&
+			   emfData[i+6] == (byte) 0x1A && emfData[i+7] == (byte) 0x0A;
+	}
+
+	/**
+	 * Scale a point in place
+	 * 
+	 * @param p point to scale in place 
+	 * @param scale scale
+	 * @return scaled point
+	 */
+	private mxPoint scalePoint(mxPoint p, double scale) 
+	{
+		if (p != null)
+		{
+			p.setX(p.getX() * scale);
+			p.setY(p.getY() * scale);
+		}
+
+		return p;
+	}
+	
+	/**
+	 * Scale a rectangle in place
+	 * 
+	 * @param rect rectangle to scale in place
+	 * @param scale scale
+	 * @return scaled rectangle
+	 */
+	private mxRectangle scaleRect(mxRectangle rect, double scale) 
+	{
+		if (rect != null) 
+		{
+			rect.setX(rect.getX() * scale);
+			rect.setY(rect.getY() * scale);
+			rect.setHeight(rect.getHeight() * scale);
+			rect.setWidth(rect.getWidth() * scale);
+		}
+
+		return rect;
+	}
+	
+	/**
+	 * 
+	 * @param rootDoc
+	 * @param currentNode
+	 * @param path
+	 * @param docData
+	 */
 	private void importNodes(Document rootDoc, Element currentNode,
 			String path, Map<String, Document> docData)
 	{
@@ -294,22 +545,20 @@ public class mxVsdxCodec
 	/**
 	 * Imports a page of the document with the actual pageHeight.<br/>
 	 * In .vdx, the Y-coordinate grows upward from the bottom of the page.<br/>
-	 * The page height is used for calculating the correct position in JGraph using
-	 * this formula: JGraph_Y_Coord = PageHeight - VDX_Y_Coord.
+	 * The page height is used for calculating the correct position in mxGraph using
+	 * this formula: mxGraph_Y_Coord = PageHeight - VSDX_Y_Coord.
 	 * @param page Actual page Element to be imported
 	 * @param graph Graph where the parsed graph is included.
-	 * @param parent The parent of the elements to be imported. This should be the default parent.
+	 * @param parent The parent of the elements to be imported.
 	 */
-	protected double importPage(mxVsdxPage page, mxGraph graph)
+	protected double importPage(mxVsdxPage page, mxGraph graph, Object parent)
 	{
-		//Updates the page number.
-		pageNumber++;
-
 		Map<Integer, VsdxShape> shapes = page.getShapes();
 		Iterator<Map.Entry<Integer, VsdxShape>> entries = shapes.entrySet()
 				.iterator();
 
 		double pageHeight = page.getPageDimensions().getY();
+		Integer pageId = page.getId();
 
 		while (entries.hasNext())
 		{
@@ -322,8 +571,8 @@ public class mxVsdxCodec
 				entry.getValue().debug = debug;
 			}
 
-			addShape(graph, entry.getValue(), graph.getDefaultParent(),
-					pageHeight);
+			addShape(graph, entry.getValue(), parent,
+					pageId, pageHeight);
 		}
 
 		Map<Integer, mxVsdxConnect> connects = page.getConnects();
@@ -333,7 +582,7 @@ public class mxVsdxCodec
 		while (entries2.hasNext())
 		{
 			Map.Entry<Integer, mxVsdxConnect> entry = entries2.next();
-			ShapePageId edgeId = addConnectedEdge(graph, entry.getValue(), pageHeight);
+			ShapePageId edgeId = addConnectedEdge(graph, entry.getValue(), pageId, pageHeight);
 			
 			if (edgeId != null)
 			{
@@ -342,13 +591,20 @@ public class mxVsdxCodec
 		}
 
 		//Process unconnected edges.
-		Iterator<VsdxShape> it = edgeShapeMap.values().iterator();
-
+		Iterator<Entry<ShapePageId, VsdxShape>> it = edgeShapeMap.entrySet().iterator();
+		
 		while (it.hasNext())
 		{
-			VsdxShape edgeShape = it.next();
-			addUnconnectedEdge(graph, parentsMap.get(new ShapePageId(pageNumber, edgeShape.getId())), edgeShape, pageHeight);
+			Entry<ShapePageId, VsdxShape> edgeShapeEntry = it.next();
+			
+			//Only this page unconnected edges
+			if (edgeShapeEntry.getKey().getPageNumber() == pageId)
+			{
+				addUnconnectedEdge(graph, parentsMap.get(edgeShapeEntry.getKey()), edgeShapeEntry.getValue(), pageHeight);
+			}
 		}
+
+		sanitiseGraph(graph);
 
 		return pageHeight;
 	}
@@ -361,8 +617,7 @@ public class mxVsdxCodec
 	 * @param parentHeight Height of the parent cell.
 	 * @return the new vertex added. null if 'shape' is not a vertex.
 	 */
-	private mxCell addShape(mxGraph graph, VsdxShape shape, Object parent,
-			double parentHeight)
+	protected mxCell addShape(mxGraph graph, VsdxShape shape, Object parent, Integer pageId, double parentHeight)
 	{
 		shape.parentHeight = parentHeight;
 
@@ -382,20 +637,22 @@ public class mxVsdxCodec
 
 				if (shape.isGroup())
 				{
-					v1 = addGroup(graph, shape, parent, parentHeight);
+					v1 = addGroup(graph, shape, parent, pageId, parentHeight);
 				}
 				else
 				{
-					v1 = addVertex(graph, shape, parent, parentHeight);
+					v1 = addVertex(graph, shape, parent, pageId, parentHeight);
 				}
 
-				vertexShapeMap.put(new ShapePageId(pageNumber, id), shape);
+				vertexShapeMap.put(new ShapePageId(pageId, id), shape);
 				return v1;
 			}
 			else
 			{
-				edgeShapeMap.put(new ShapePageId(pageNumber, id), shape);
-				parentsMap.put(new ShapePageId(pageNumber, id), parent);
+				//remember the edge order to maintain the shapes order (back to front)
+				shape.setShapeIndex(graph.getModel().getChildCount(parent));
+				edgeShapeMap.put(new ShapePageId(pageId, id), shape);
+				parentsMap.put(new ShapePageId(pageId, id), parent);
 			}
 		}
 
@@ -410,8 +667,7 @@ public class mxVsdxCodec
 	 * @param parentHeight Height of the parent cell of the shape.
 	 * @return Cell added to the graph.
 	 */
-	public mxCell addGroup(mxGraph graph, VsdxShape shape, Object parent,
-			double parentHeight)
+	public mxCell addGroup(mxGraph graph, VsdxShape shape, Object parent, Integer pageId, double parentHeight)
 	{
 		//Set title
 		//		String t = "";
@@ -422,64 +678,55 @@ public class mxVsdxCodec
 		//		{
 		//			t = (text.getTextContent());
 		//		}
-		String textLabel = "";
-
-		if (!shape.hasLabelControl() && !shape.hasScratchControl()
-				&& !shape.isDisplacedLabel() && !shape.isRotatedLabel())
-		{
-			textLabel = shape.getTextLabel();
-		}
-
+		
 		//Define dimensions
 		mxPoint d = shape.getDimensions();
 		mxVsdxMaster master = shape.getMaster();
-
-		//Define origin
-		mxPoint o = shape.getOriginPoint(parentHeight, true);
-
 		//Define style
 		Map<String, String> styleMap = shape.getStyleFromShape();
 		
-		if (!shape.hasGeom())
+		//Shape inherit its master geometry, so we don't need to check its master
+		mxVsdxGeometryList geomList = shape.getGeomList();
+		
+		if (geomList.isNoFill())
 		{
 			styleMap.put(mxConstants.STYLE_FILLCOLOR, "none");
-			styleMap.put(mxConstants.STYLE_STROKECOLOR, "none");
 			styleMap.put(mxConstants.STYLE_GRADIENTCOLOR, "none");
 		}
-
-		if (textLabel.startsWith("<p>") || textLabel.startsWith("<p ")
-				|| textLabel.startsWith("<font"))
+		
+		if (geomList.isNoLine())
 		{
-			styleMap.put("html", "1");
+			styleMap.put(mxConstants.STYLE_STROKECOLOR, "none");
 		}
 
-		if (!shape.hasLabelControl() && !shape.hasScratchControl())
-		{
-			styleMap.put(mxConstants.STYLE_WHITE_SPACE, "wrap");
-		}
-
-		//styleMap.put(mxConstants.STYLE_FILLCOLOR, subShape2.getColor());
+		styleMap.put("html", "1");
+		styleMap.put(mxConstants.STYLE_WHITE_SPACE, "wrap");
 		//TODO need to check if "shape=" should be added before the shape name (for "image", it should be skipped for example)
-		String style = ";" + mxVsdxUtils.getStyleString(styleMap, "=");
+		String style = mxVsdxUtils.getStyleString(styleMap, "=");
 
 		mxCell group = null;
+		Map<Integer, VsdxShape> children = shape.getChildShapes();
+		boolean hasChildren = children != null && children.size() > 0;
+		boolean subLabel = shape.isDisplacedLabel() || shape.isRotatedLabel() || hasChildren;
+		mxPoint o = shape.getOriginPoint(parentHeight, true);
 
-		if (!shape.hasScratchControl())
+		if (subLabel)
 		{
-			group = (mxCell) graph.insertVertex(parent, null, null, o.getX(),
-					o.getY() + yOffset, d.getX(), d.getY(), style);
+			group = (mxCell) graph.insertVertex(parent, null, null,
+				Math.round(o.getX() * 100) / 100, Math.round(o.getY() * 100) / 100,
+				Math.round(d.getX() * 100) / 100, Math.round(d.getY() * 100) / 100, style);
 		}
 		else
 		{
+			String textLabel = shape.getTextLabel();
 			group = (mxCell) graph.insertVertex(parent, null, textLabel,
-					o.getX(), o.getY() + yOffset, d.getX(), d.getY(), style);
+				Math.round(o.getX() * 100) / 100, Math.round(o.getY() * 100) / 100,
+				Math.round(d.getX() * 100) / 100, Math.round(d.getY() * 100) / 100, style);
 		}
 
-		// Add children
-		Map<Integer, VsdxShape> children = shape.getChildShapes();
 		Iterator<Map.Entry<Integer, VsdxShape>> entries = children.entrySet()
 				.iterator();
-
+		
 		while (entries.hasNext())
 		{
 			Map.Entry<Integer, VsdxShape> entry = entries.next();
@@ -505,14 +752,15 @@ public class mxVsdxCodec
 				{
 					if (subShape.isVertex())
 					{
+						subShape.propagateRotation(shape.getRotation());
+
 						if (subShape.isGroup())
 						{
-							addGroup(graph, subShape, group, d.getY());
+							addGroup(graph, subShape, group, pageId, d.getY());
 						}
 						else
 						{
-							addVertex(graph, subShape, group, d.getY());
-
+							addVertex(graph, subShape, group, pageId, d.getY());
 						}
 					}
 				}
@@ -520,7 +768,7 @@ public class mxVsdxCodec
 				if (master == null)
 				{
 					// If the group doesn't have a master, sub vertices are instances of document masters
-					vertexShapeMap.put(new ShapePageId(pageNumber, Id),
+					vertexShapeMap.put(new ShapePageId(pageId, Id),
 							subShape);
 				}
 			}
@@ -529,33 +777,51 @@ public class mxVsdxCodec
 				if (master == null)
 				{
 					// If the group doesn't have a master, sub edges are instances of document masters
-					edgeShapeMap.put(new ShapePageId(pageNumber, Id),
+					edgeShapeMap.put(new ShapePageId(pageId, Id),
 							subShape);
-					parentsMap.put(new ShapePageId(pageNumber, Id), group);
+					parentsMap.put(new ShapePageId(pageId, Id), group);
+				}
+				else
+				{
+					addUnconnectedEdge(graph, group, subShape, parentHeight);
 				}
 			}
 		}
-
-		if (!shape.hasScratchControl() && !textLabel.equals(""))
+		
+		if (subLabel)
 		{
-			styleMap.put(mxConstants.STYLE_FILLCOLOR, mxConstants.NONE);
-			styleMap.put(mxConstants.STYLE_STROKECOLOR, mxConstants.NONE);
-			style = mxVsdxUtils.getStyleString(styleMap, "=");
-			graph.insertVertex(parent, null, textLabel, o.getX(), o.getY()
-					+ yOffset, d.getX(), d.getY(), style);
+			shape.createLabelSubShape(graph, group);
 		}
 
-		if (shape.hasLabelControl() || shape.isDisplacedLabel()
-				|| shape.isRotatedLabel())
+		//rotate sub vertices coordinates based on parent rotation. It should be done here after the group size if determined
+		double rotation = shape.getRotation();
+		if (rotation != 0)
 		{
-			createLabelSubShape(graph, shape, group, parentHeight);
+			mxGeometry pgeo = group.getGeometry();
+			double hw = pgeo.getWidth() / 2, hh = pgeo.getHeight() / 2;
+			for (int i = 0; i < group.getChildCount(); i++)
+			{
+				mxICell child = group.getChildAt(i);
+				Utils.rotatedGeometry(child.getGeometry(), rotation, hw, hh);				
+			}
 		}
-		else if (shape.hasScratchControl())
-		{
-			createScratchLabel(graph, shape, group, parentHeight);
-		}
-
 		return group;
+	}
+
+	public static void rotatedEdgePoint(mxPoint pt, double rotation,
+			double cx, double cy)
+	{
+		rotation = Math.toRadians(rotation);
+		double cos = Math.cos(rotation), sin = Math.sin(rotation);
+
+		double x = pt.getX() - cx;
+		double y = pt.getY() - cy;
+
+		double x1 = x * cos - y * sin;
+		double y1 = y * cos + x * sin;
+
+		pt.setX(Math.round(x1 + cx));
+		pt.setY(Math.round(y1 + cy));
 	}
 
 	/**
@@ -565,29 +831,27 @@ public class mxVsdxCodec
 	 * @param parentHeight Height of the parent cell of the shape.
 	 * @return Cell added to the graph.
 	 */
-	public mxCell addVertex(mxGraph graph, VsdxShape shape, Object parent,
-			double parentHeight)
+	public mxCell addVertex(mxGraph graph, VsdxShape shape, Object parent, Integer pageId, double parentHeight)
 	{
 		//Defines Text Label.
 		String textLabel = "";
 
-		if (!shape.hasLabelControl() && !shape.hasScratchControl()
-				&& !shape.isRotatedLabel())
+		boolean hasSubLabel = shape.isDisplacedLabel() || shape.isRotatedLabel();// || shape.getRotation() != 0;
+
+		if (!hasSubLabel)
 		{
 			textLabel = shape.getTextLabel();
 		}
 
-		mxPoint coordinates = shape.getOriginPoint(parentHeight, true);
 		mxPoint dimensions = shape.getDimensions();
 
-		//Defines style
 		Map<String, String> styleMap = shape.getStyleFromShape();
 
-		if (textLabel.startsWith("<p>") || textLabel.startsWith("<p ")
-				|| textLabel.startsWith("<font"))
-		{
+		//if (textLabel != null && (textLabel.startsWith("<p>") || textLabel.startsWith("<p ")
+		//		|| textLabel.startsWith("<font")))
+		//{
 			styleMap.put("html", "1");
-		}
+		//}
 
 		boolean geomExists = styleMap.containsKey(mxConstants.STYLE_SHAPE)
 				|| styleMap.containsKey("stencil");
@@ -608,47 +872,35 @@ public class mxVsdxCodec
 			styleMap.put(mxConstants.STYLE_GRADIENTCOLOR, "none");
 		}
 
-		String shapeName = shape.getMasterName();
+		styleMap.put(mxConstants.STYLE_WHITE_SPACE, "wrap");
 
-		if ((!shape.hasLabelControl() && !shape.hasScratchControl())
-				|| VsdxShape.OFFSET_ARRAY.contains(shapeName))
+		mxPoint coordinates = shape.getOriginPoint(parentHeight, true);
+
+		if (geomExists || textLabel != null)
 		{
-			styleMap.put(mxConstants.STYLE_WHITE_SPACE, "wrap");
-		}
-
-		double y = coordinates.getY();
-
-		if (parent == graph.getDefaultParent())
-		{
-			y += yOffset;
-		}
-
-		if (geomExists || !textLabel.isEmpty() || shape.hasScratchControl()
-				|| shape.isDisplacedLabel())
-		{
-			String style = ";vsdx16Vertex;" + mxVsdxUtils.getStyleString(styleMap, "=");
+			String style = mxVsdxUtils.getStyleString(styleMap, "=");
 
 			mxCell v1 = null;
 
-			if (!shape.hasScratchControl() || shape.hasLabelControl()
-					|| shape.isDisplacedLabel() || shape.isRotatedLabel())
+			if (hasSubLabel)
+			{
+				v1 = (mxCell) graph.insertVertex(parent, null, null,
+					Math.round(coordinates.getX() * 100) / 100, Math.round(coordinates.getY() * 100) / 100,
+					Math.round(dimensions.getX() * 100) / 100, Math.round(dimensions.getY() * 100) / 100, style);
+			}
+			else
 			{
 				v1 = (mxCell) graph.insertVertex(parent, null, textLabel,
-						coordinates.getX(), y, dimensions.getX(),
-						dimensions.getY(), style);
-				vertexMap
-						.put(new ShapePageId(pageNumber, shape.getId()), v1);
+					Math.round(coordinates.getX() * 100) / 100, Math.round(coordinates.getY() * 100) / 100,
+					Math.round(dimensions.getX() * 100) / 100, Math.round(dimensions.getY() * 100) / 100, style);
 			}
 
+			vertexMap.put(new ShapePageId(pageId, shape.getId()), v1);
 			shape.setLabelOffset(v1, style);
 
-			if (shape.hasLabelControl() || shape.isRotatedLabel())
+			if (hasSubLabel)
 			{
-				createLabelSubShape(graph, shape, v1, parentHeight);
-			}
-			else if (shape.hasScratchControl())
-			{
-				createScratchLabel(graph, shape, v1, parentHeight);
+				shape.createLabelSubShape(graph, v1);
 			}
 
 			return v1;
@@ -663,483 +915,293 @@ public class mxVsdxCodec
 	 * @param graph graph Graph where the parsed graph is included.
 	 * @param connect Connect Element that references an edge shape and the source vertex.
 	 */
-	protected ShapePageId addConnectedEdge(mxGraph graph, mxVsdxConnect connect,
-			double pageHeight)
+	protected ShapePageId addConnectedEdge(mxGraph graph, mxVsdxConnect connect, Integer pageId, double pageHeight)
 	{
 		Integer fromSheet = connect.getFromSheet();
-		ShapePageId edgeId = new ShapePageId(pageNumber, fromSheet);
+		ShapePageId edgeId = new ShapePageId(pageId, fromSheet);
 		VsdxShape edgeShape = edgeShapeMap.get(edgeId);
 
-		if (edgeShape != null)
+		if (edgeShape == null)
 		{
-			Object parent = parentsMap.get(new ShapePageId(pageNumber,
-					edgeShape.getId()));
+			return null;
+		}
 
-			double parentHeight = pageHeight;
+		Object parent = parentsMap.get(new ShapePageId(pageId,
+				edgeShape.getId()));
+		double parentHeight = pageHeight;
 
-			mxCell parentCell = (mxCell) parent;
+		if (parent != null)
+		{
+			mxGeometry parentGeo = graph.getModel().getGeometry(parent);
 
-			if (parentCell != null)
+			if (parentGeo != null)
 			{
-				mxGeometry parentGeometry = parentCell.getGeometry();
-
-				if (parentGeometry != null)
-				{
-					parentHeight = parentGeometry.getHeight();
-				}
+				parentHeight = parentGeo.getHeight();
 			}
+		}
 
-			//Get beginXY and endXY coordinates.
-			mxPoint beginXY = edgeShape.getStartXY(parentHeight);
-			beginXY = calculateAbsolutePoint((mxCell) parent, graph, beginXY);
+		//Get beginXY and endXY coordinates.
+		mxPoint beginXY = edgeShape.getStartXY(parentHeight);
+		mxPoint endXY = edgeShape.getEndXY(parentHeight);
+		List<mxPoint> points = edgeShape.getRoutingPoints(parentHeight, beginXY, edgeShape.getRotation());
 
-			mxPoint endXY = edgeShape.getEndXY(parentHeight);
-			endXY = calculateAbsolutePoint((mxCell) parent, graph, endXY);
+		rotateChildEdge(graph.getModel(), parent, beginXY, endXY, points);
 
-			mxPoint fromConstraint = null;
-			mxPoint toConstraint = null;
+		Integer sourceSheet = connect.getSourceToSheet();
 
-			//Defines text label
-			String textLabel = edgeShape.getTextLabel();
+		mxCell source = sourceSheet != null ? vertexMap
+				.get(new ShapePageId(pageId, sourceSheet)) : null;
 
-			Integer sourceSheet = connect.getSourceToSheet();
-			Integer toSheet = connect.getTargetToSheet();
+		if (source == null)
+		{
+			// Source is dangling
+			source = (mxCell) graph.insertVertex(parent, null, null,
+				Math.round(beginXY.getX() * 100) / 100,
+				Math.round(beginXY.getY() * 100) / 100, 0, 0);
+		}
+		//Else: Routing points will contain the exit/entry points, so no need to set the to/from constraint 
 
-			VsdxShape fromShape = sourceSheet != null ? vertexShapeMap
-					.get(new ShapePageId(pageNumber, sourceSheet)) : null;
-			VsdxShape toShape = toSheet != null ? vertexShapeMap
-					.get(new ShapePageId(pageNumber, toSheet)) : null;
+		Integer toSheet = connect.getTargetToSheet();
 
-			mxCell source = sourceSheet != null ? vertexMap
-					.get(new ShapePageId(pageNumber, sourceSheet)) : null;
-			mxCell target = toSheet != null ? vertexMap.get(new ShapePageId(
-					pageNumber, toSheet)) : null;
+		mxCell target = toSheet != null ? vertexMap.get(new ShapePageId(
+				pageId, toSheet)) : null;
 
-			if (fromShape == null || source == null)
-			{
-				// Source is dangling
-				source = (mxCell) graph.insertVertex(parent, null, null,
-						beginXY.getX(), beginXY.getY() + yOffset, 0, 0);
-				fromConstraint = new mxPoint(0, 0);
-			}
-			else
-			{
-				mxPoint dimensionFrom = fromShape.getDimensions();
+		if (target == null)
+		{
+			// Target is dangling
+			target = (mxCell) graph.insertVertex(parent, null, null,
+				Math.round(endXY.getX() * 100) / 100,
+				Math.round(endXY.getY() * 100) / 100, 0, 0);
+		}
+		//Else: Routing points will contain the exit/entry points, so no need to set the to/from constraint 
 
-				//Get From shape origin and begin/end of edge in absolutes values.
-				double height = pageHeight;
-
-				if ((source.getParent() != null)
-						&& (source.getParent().getGeometry() != null))
-				{
-					height = source.getParent().getGeometry().getHeight();
-				}
-
-				mxPoint originFrom = fromShape.getOriginPoint(height, false);
-				mxPoint absOriginFrom = calculateAbsolutePoint(
-						(mxCell) source.getParent(), graph, originFrom);
-
-				Integer sourceToPart = connect.getSourceToPart();
-
-				if (sourceToPart != mxVsdxConstants.CONNECT_TO_PART_WHOLE_SHAPE)
-				{
-					fromConstraint = new mxPoint(
-							(beginXY.getX() - absOriginFrom.getX())
-									/ dimensionFrom.getX(),
-							(beginXY.getY() - absOriginFrom.getY())
-									/ dimensionFrom.getY());
-				}
-
-			}
-
-			if (toShape == null || target == null)
-			{
-				// Target is dangling
-				target = (mxCell) graph.insertVertex(parent, null, null,
-						endXY.getX(), endXY.getY() + yOffset, 0, 0);
-				toConstraint = new mxPoint(0, 0);
-			}
-			else
-			{
-				target = vertexMap.get(new ShapePageId(pageNumber, toSheet));
-
-				mxPoint dimentionTo = toShape.getDimensions();
-
-				//Get To shape origin.
-				double height = pageHeight;
-
-				if ((target.getParent() != null)
-						&& (target.getParent().getGeometry() != null))
-				{
-					height = target.getParent().getGeometry().getHeight();
-				}
-
-				mxPoint originTo = toShape.getOriginPoint(height, false);
-				mxPoint absOriginTo = calculateAbsolutePoint(
-						(mxCell) target.getParent(), graph, originTo);
-
-				Integer targetToPart = connect.getTargetToPart();
-
-				if (targetToPart != mxVsdxConstants.CONNECT_TO_PART_WHOLE_SHAPE)
-				{
-					toConstraint = new mxPoint(
-							(endXY.getX() - absOriginTo.getX())
-									/ dimentionTo.getX(),
-							(endXY.getY() - absOriginTo.getY())
-									/ dimentionTo.getY());
-				}
-			}
-
-			//Defines the style of the edge.
-			Map<String, String> styleMap = edgeShape
-					.getStyleFromEdgeShape(parentHeight);
-			//Insert new edge and set constraints.
-			Object edge = graph.insertEdge(parent, null, textLabel, source,
-					target, ";" + mxVsdxUtils.getStyleString(styleMap, "="));
-
-			mxGeometry edgeGeometry = graph.getModel().getGeometry(edge);
-			edgeGeometry.setPoints(edgeShape.getRoutingPoints(parentHeight
-					+ (parent == graph.getDefaultParent() ? yOffset : 0)));
-
-			if (fromConstraint != null)
-			{
-				graph.setConnectionConstraint(edge, source, true,
-						new mxConnectionConstraint(fromConstraint, false));
-			}
-			if (toConstraint != null)
-			{
-				graph.setConnectionConstraint(edge, target, false,
-						new mxConnectionConstraint(toConstraint, false));
-			}
-
-			//Gets and sets routing points of the edge.
-			if (styleMap.containsKey("curved")
-					&& styleMap.get("curved").equals("1"))
-			{
-				edgeGeometry = graph.getModel().getGeometry(edge);
-				List<mxPoint> pointList = edgeShape
-						.getControlPoints(parentHeight);
-				edgeGeometry.setPoints(pointList);
-			}
+		//Defines the style of the edge.
+		Map<String, String> styleMap = edgeShape
+				.getStyleFromEdgeShape(parentHeight);
+		//Insert new edge and set constraints.
+		Object edge;
+		double rotation = edgeShape.getRotation();
+		if (rotation != 0)
+		{
+			edge = graph.insertEdge(parent, null, null, source,
+					target, mxVsdxUtils.getStyleString(styleMap, "="));
 			
-			return edgeId;
+			mxCell label = edgeShape.createLabelSubShape(graph, (mxCell) edge);
+			if (label != null)
+			{
+				label.setStyle(label.getStyle() + ";rotation=" + (rotation > 60 && rotation < 240 ? (rotation + 180) % 360 : rotation));
+				
+				mxGeometry geo = label.getGeometry();
+				geo.setX(0);
+				geo.setY(0);
+				geo.setRelative(true);
+				geo.setOffset(new mxPoint(-geo.getWidth() / 2, -geo.getHeight() / 2));
+			}
+		}
+		else
+		{
+			edge = graph.insertEdge(parent, null, edgeShape.getTextLabel(), source,
+					target, mxVsdxUtils.getStyleString(styleMap, "="));
+			
+			mxPoint lblOffset = edgeShape.getLblEdgeOffset(graph.getView(), points);
+			((mxCell)edge).getGeometry().setOffset(lblOffset);
 		}
 		
-		return null;
-	}
+		mxGeometry edgeGeometry = graph.getModel().getGeometry(edge);
+		edgeGeometry.setPoints(points);
 
-		/**
-		 * Adds a new edge not connected to any vertex to the graph.
-		 * @param graph Graph where the parsed graph is included.
-		 * @param parent Parent cell of the edge to be imported.
-		 * @param edgeShape Shape Element that represents an edge.
-		 * @return The new edge added.
-		 */
-		protected Object addUnconnectedEdge(mxGraph graph, Object parent, VsdxShape edgeShape, double pageHeight)
+		//Gets and sets routing points of the edge.
+		if (styleMap.containsKey("curved")
+				&& styleMap.get("curved").equals("1"))
 		{
-			//Defines the label of the edge.
-			String textLabel = edgeShape.getTextLabel();
-	
-			double parentHeight = pageHeight;
-
-			mxCell parentCell = (mxCell) parent;
-
-			if (parentCell != null)
-			{
-				mxGeometry parentGeometry = parentCell.getGeometry();
-
-				if (parentGeometry != null)
-				{
-					parentHeight = parentGeometry.getHeight();
-				}
-			}
-	
-			mxPoint beginXY = edgeShape.getStartXY(parentHeight);
-			mxPoint endXY = edgeShape.getEndXY(parentHeight);
-
-			//Define style of the edge
-			Map<String, String> styleMap = edgeShape.getStyleFromEdgeShape(parentHeight);
-	
-			//TODO add style numeric entries rounding option
-			
-			//Insert new edge and set constraints.
-			Object edge = graph.insertEdge(parent, null, textLabel, null, null, ";" + mxVsdxUtils.getStyleString(styleMap, "="));
-			mxGeometry edgeGeometry = graph.getModel().getGeometry(edge);
-			edgeGeometry.setPoints(edgeShape.getRoutingPoints(parentHeight
-					+ (parent == graph.getDefaultParent() ? yOffset : 0)));
-			
-			edgeGeometry.setTerminalPoint(beginXY, true);
-			edgeGeometry.setTerminalPoint(endXY, false);
-
-			//Gets and sets routing points of the edge.
-			if (styleMap.containsKey("curved")
-					&& styleMap.get("curved").equals("1"))
-			{
-				edgeGeometry = graph.getModel().getGeometry(edge);
-				List<mxPoint> pointList = edgeShape
-						.getControlPoints(parentHeight);
-				edgeGeometry.setPoints(pointList);
-			}
-			
-			return edge;
+			edgeGeometry = graph.getModel().getGeometry(edge);
+			List<mxPoint> pointList = edgeShape
+					.getControlPoints(parentHeight);
+			edgeGeometry.setPoints(pointList);
 		}
+		
+		return edgeId;
+	}
 
 	/**
-	 * Creates a sub shape for <b>shape</b> that contains the label. Used internally, when the label is positioned by an anchor.
-	 * @param graph
-	 * @param shape the shape we want to create the label for
-	 * @param parent
-	 * @param parentHeight
-	 * @return label sub-shape
+	 * Adds a new edge not connected to any vertex to the graph.
+	 * @param graph Graph where the parsed graph is included.
+	 * @param parent Parent cell of the edge to be imported.
+	 * @param edgeShape Shape Element that represents an edge.
+	 * @return The new edge added.
 	 */
-	private mxCell createLabelSubShape(mxGraph graph, VsdxShape shape,
-			mxCell parent, double parentHeight)
+	protected Object addUnconnectedEdge(mxGraph graph, Object parent, VsdxShape edgeShape, double pageHeight)
 	{
-		String txtPinXV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_PIN_X, "V", "");
-		String txtPinYV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_PIN_Y, "V", "");
-		String txtWV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_WIDTH, "V", "");
-		String txtHV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_HEIGHT, "V", "");
-		String txtLocPinXV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_LOC_PIN_X, "V", "");
-		String txtLocPinYV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_LOC_PIN_Y, "V", "");
-		String txtAngleV = shape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-				mxVsdxConstants.TXT_ANGLE, "V", "");
+		double parentHeight = pageHeight;
 
-		mxMasterShape masterShape = shape.getMaster() != null ? shape
-				.getMaster().getMasterShape() : null;
-
-		if (masterShape != null)
+		if (parent != null)
 		{
-			if (txtPinXV.equals(""))
-			{
-				txtPinXV = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-						mxVsdxConstants.TXT_PIN_X, "V", "");
-			}
+			mxGeometry parentGeometry = graph.getModel().getGeometry(parent);
 
-			if (txtPinYV.equals(""))
+			if (parentGeometry != null)
 			{
-				txtPinYV = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-						mxVsdxConstants.TXT_PIN_Y, "V", "");
-			}
-
-			if (txtWV.equals(""))
-			{
-				txtWV = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-						mxVsdxConstants.TXT_WIDTH, "V", "");
-			}
-
-			if (txtHV.equals(""))
-			{
-				txtHV = masterShape.getAttribute(mxVsdxConstants.TEXT_X_FORM,
-						mxVsdxConstants.TXT_HEIGHT, "V", "");
-			}
-
-			if (txtLocPinXV.equals(""))
-			{
-				txtLocPinXV = masterShape.getAttribute(
-						mxVsdxConstants.TEXT_X_FORM,
-						mxVsdxConstants.TXT_LOC_PIN_X, "V", "");
-			}
-
-			if (txtLocPinYV.equals(""))
-			{
-				txtLocPinYV = masterShape.getAttribute(
-						mxVsdxConstants.TEXT_X_FORM,
-						mxVsdxConstants.TXT_LOC_PIN_Y, "V", "");
-			}
-
-			if (txtAngleV.equals(""))
-			{
-				txtAngleV = masterShape.getAttribute(
-						mxVsdxConstants.TEXT_X_FORM, mxVsdxConstants.TXT_ANGLE,
-						"V", "");
+				parentHeight = parentGeometry.getHeight();
 			}
 		}
 
-		if (!txtPinXV.equals("") && !txtPinYV.equals("") && !txtWV.equals("")
-				&& !txtHV.equals("") && !txtLocPinXV.equals("")
-				&& !txtLocPinYV.equals(""))
+		mxPoint beginXY = edgeShape.getStartXY(parentHeight);
+		mxPoint endXY = edgeShape.getEndXY(parentHeight);
+
+		//Define style of the edge
+		Map<String, String> styleMap = edgeShape.getStyleFromEdgeShape(parentHeight);
+
+		//TODO add style numeric entries rounding option
+		
+		//Insert new edge and set constraints.
+		Object edge;
+		List<mxPoint> points = edgeShape.getRoutingPoints(parentHeight, beginXY, edgeShape.getRotation());
+		double rotation = edgeShape.getRotation();
+		if (rotation != 0)
 		{
-			String textLabel = shape.getTextLabel();
-
-			if (!textLabel.equals(""))
+			if (edgeShape.getShapeIndex() == 0)
 			{
-				Map<String, String> styleMap = shape.getStyleFromShape();
-				styleMap.remove("shape");
-				styleMap.put(mxConstants.STYLE_FILLCOLOR, mxConstants.NONE);
-				styleMap.put(mxConstants.STYLE_STROKECOLOR, mxConstants.NONE);
-				styleMap.put("align", "center");
-				styleMap.put("verticalAlign", "middle");
-				styleMap.put("whiteSpace", "wrap");
-
-				if (!txtAngleV.equals(""))
-				{
-					String oldRotS = styleMap.get("rotation");
-					double oldRot = 0;
-
-					if (oldRotS != null)
-					{
-						oldRot = Double.parseDouble(oldRotS);
-					}
-
-					double labRot = Double.parseDouble(txtAngleV) * 180
-							/ Math.PI;
-
-					labRot = Math.round((labRot + oldRot) * 100.0) / 100.0;
-
-					if (labRot != 0.0)
-					{
-						styleMap.put("rotation", Double.toString(labRot));
-					}
-				}
-
-				String style = "text;"
-						+ mxVsdxUtils.getStyleString(styleMap, "=");
-
-				//				mxPoint coords = shape.getOriginPoint(parentHeight);
-				//				mxPoint dims = shape.getDimensions();
-				mxPoint coords = new mxPoint(parent.getGeometry().getX(),
-						parent.getGeometry().getY());
-				mxPoint dims = new mxPoint(parent.getGeometry().getWidth(),
-						parent.getGeometry().getHeight());
-
-				double txtPinX = Double.parseDouble(txtPinXV)
-						* mxVsdxUtils.conversionFactor;
-				double txtPinY = Double.parseDouble(txtPinYV)
-						* mxVsdxUtils.conversionFactor;
-				double txtW = Double.parseDouble(txtWV)
-						* mxVsdxUtils.conversionFactor;
-				double txtLocPinX = Double.parseDouble(txtLocPinXV)
-						* mxVsdxUtils.conversionFactor;
-				double txtLocPinY = Double.parseDouble(txtLocPinYV)
-						* mxVsdxUtils.conversionFactor;
-				double txtH = Double.parseDouble(txtHV)
-						* mxVsdxUtils.conversionFactor;
-
-				double x = coords.getX() + txtPinX - txtLocPinX;
-				double y = coords.getY() + dims.getY() - txtPinY + txtLocPinY
-						- txtH;
-
-				mxCell v1 = (mxCell) graph.insertVertex(
-						graph.getDefaultParent(), null, textLabel, x, y
-								+ yOffset, txtW, txtH, style + ";html=1;");
-
-				return v1;
+				edge = graph.insertEdge(parent, null, null, null, null, mxVsdxUtils.getStyleString(styleMap, "="));
+			}
+			else
+			{
+				edge = graph.createEdge(parent, null, null, null, null, mxVsdxUtils.getStyleString(styleMap, "="));
+				edge = graph.addEdge(edge, parent, null, null, edgeShape.getShapeIndex());
+			}
+			mxCell label = edgeShape.createLabelSubShape(graph, (mxCell) edge);
+			if (label != null)
+			{
+				label.setStyle(label.getStyle() + ";rotation=" + (rotation > 60 && rotation < 240 ? (rotation + 180) % 360 : rotation));
+				
+				mxGeometry geo = label.getGeometry();
+				geo.setX(0);
+				geo.setY(0);
+				geo.setRelative(true);
+				geo.setOffset(new mxPoint(-geo.getWidth() / 2, -geo.getHeight() / 2));
 			}
 		}
+		else
+		{
+			if (edgeShape.getShapeIndex() == 0)
+			{
+				edge = graph.insertEdge(parent, null, edgeShape.getTextLabel(), null, null, mxVsdxUtils.getStyleString(styleMap, "="));
+			}
+			else
+			{
+				edge = graph.createEdge(parent, null, edgeShape.getTextLabel(), null, null, mxVsdxUtils.getStyleString(styleMap, "="));
+				edge = graph.addEdge(edge, parent, null, null, edgeShape.getShapeIndex());
+			}
+			
+			mxPoint lblOffset = edgeShape.getLblEdgeOffset(graph.getView(), points);
+			((mxCell)edge).getGeometry().setOffset(lblOffset);
+		}
+		
+		rotateChildEdge(graph.getModel(), parent, beginXY, endXY, points);
+		
+		mxGeometry edgeGeometry = graph.getModel().getGeometry(edge);
+		edgeGeometry.setPoints(points);
+		
+		edgeGeometry.setTerminalPoint(beginXY, true);
+		edgeGeometry.setTerminalPoint(endXY, false);
 
-		return null;
+		//Gets and sets routing points of the edge.
+		if (styleMap.containsKey("curved")
+				&& styleMap.get("curved").equals("1"))
+		{
+			edgeGeometry = graph.getModel().getGeometry(edge);
+			List<mxPoint> pointList = edgeShape
+					.getControlPoints(parentHeight);
+			edgeGeometry.setPoints(pointList);
+		}
+		
+		return edge;
 	}
 
-	private mxCell createScratchLabel(mxGraph graph, VsdxShape shape,
-			mxCell parent, double parentHeight)
+	protected void rotateChildEdge(mxIGraphModel model, Object parent, mxPoint beginXY, mxPoint endXY, List<mxPoint> points) {
+		//Rotate all points based on parent rotation
+		//Must get parent rotation and apply it similar to what we did in group rotation of all children
+		if (parent != null)
+		{
+			mxGeometry pgeo = model.getGeometry(parent);
+			String pStyle = model.getStyle(parent);
+			
+			if (pgeo != null && pStyle != null) 
+			{
+				int pos = pStyle.indexOf("rotation=");
+				
+				if (pos > -1)
+				{
+					double pRotation = Double.parseDouble(pStyle.substring(pos + 9, pStyle.indexOf(';', pos))); //9 is the length of "rotation="
+	
+					double hw = pgeo.getWidth() / 2, hh = pgeo.getHeight() / 2;
+					
+					rotatedEdgePoint(beginXY, pRotation, hw, hh);
+					rotatedEdgePoint(endXY, pRotation, hw, hh);
+					
+					for (mxPoint p : points) 
+					{
+						rotatedEdgePoint(p, pRotation, hw, hh);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Post processes groups to remove leaf vertices that render nothing
+	 * @param group
+	 */
+	protected void sanitiseGraph(mxGraph graph)
 	{
-		VsdxShape rootShape = shape.getRootShape();
-		String xV = rootShape.getAttribute(mxVsdxConstants.CONTROL,
-				mxVsdxConstants.X, "V", "");
-		String yV = rootShape.getAttribute(mxVsdxConstants.CONTROL,
-				mxVsdxConstants.Y, "V", "");
-		String txtHV = rootShape.getAttribute(mxVsdxConstants.CONTROL,
-				mxVsdxConstants.TXT_HEIGHT, "V", "");
+		Object root = graph.getModel().getRoot();
+		sanitiseCell(graph, root);
+	}
+	
+	private boolean sanitiseCell(mxGraph graph, Object cell)
+	{
+		mxIGraphModel model = graph.getModel();
+		int childCount = model.getChildCount(cell);
+		ArrayList<Object> removeList = new ArrayList<Object>();
 
-		mxMasterShape masterShape = shape.getMaster() != null ? shape
-				.getMaster().getMasterShape() : null;
-
-		if (masterShape != null)
+		for (int i = 0; i < childCount; i++)
 		{
-			if (xV == "")
+			Object child = model.getChildAt(cell, i);
+			boolean remove = sanitiseCell(graph, child);
+			
+			// Can't remove during loop or indexing is messed up
+			if (remove)
 			{
-				xV = masterShape.getAttribute(mxVsdxConstants.CONTROL,
-						mxVsdxConstants.X, "V", "");
-			}
-
-			if (yV == "")
-			{
-				yV = masterShape.getAttribute(mxVsdxConstants.CONTROL,
-						mxVsdxConstants.Y, "V", "");
-			}
-
-			if (txtHV == "")
-			{
-				txtHV = masterShape.getAttribute(mxVsdxConstants.CONTROL,
-						mxVsdxConstants.TXT_HEIGHT, "V", "");
+				removeList.add(child);
 			}
 		}
-
-		if (!xV.equals("") && !yV.equals("") && !xV.toLowerCase().equals("inh")
-				&& !yV.toLowerCase().equals("inh"))
+		
+		for (Object removeChild : removeList)
 		{
-			double txtH = 0;
-
-			//TODO textHeight is found elsewhere in this case 
-			if (!txtHV.equals(""))
-			{
-				txtH = Double.parseDouble(txtHV) * mxVsdxUtils.conversionFactor;
-			}
-
-			txtH = 15;
-
-			String textLabel = shape.getTextLabel();
-			double xCoord = Double.parseDouble(xV)
-					* mxVsdxUtils.conversionFactor;
-			double yCoord = Double.parseDouble(yV)
-					* mxVsdxUtils.conversionFactor;
-			mxPoint dims = rootShape.getDimensions();
-
-			Map<String, String> styleMap = shape.getStyleFromShape();
-			styleMap.remove("shape");
-			styleMap.put(mxConstants.STYLE_FILLCOLOR, mxConstants.NONE);
-			styleMap.put(mxConstants.STYLE_STROKECOLOR, mxConstants.NONE);
-
-			if (xCoord <= 0)
-			{
-				styleMap.put("align", "right");
-				styleMap.put("labelPosition", "left");
-			}
-			else if (xCoord >= dims.getX())
-			{
-				styleMap.put("align", "left");
-			}
-			else
-			{
-				styleMap.put("align", "center");
-			}
-
-			if (yCoord <= 0)
-			{
-				styleMap.put("verticalLabelPosition", "bottom");
-			}
-			else if (yCoord >= dims.getY())
-			{
-				styleMap.put("verticalLabelPosition", "top");
-			}
-			else
-			{
-				styleMap.put("verticalLabelPosition", "middle");
-			}
-
-			styleMap.put("verticalAlign", "middle");
-
-			styleMap.put("whiteSpace", "none");
-			String style = "text;" + mxVsdxUtils.getStyleString(styleMap, "=");
-
-			mxPoint coords = rootShape.getOriginPoint(rootShape.parentHeight, false);
-
-			double x = coords.getX() + xCoord - dims.getX() / 2;
-			double y = coords.getY() + dims.getY() - yCoord - txtH / 2;
-
-			mxCell v1 = (mxCell) graph.insertVertex(graph.getDefaultParent(),
-					null, textLabel, x, y + yOffset, dims.getX(), txtH, style
-							+ ";html=1;");
-
-			return v1;
+			model.remove(removeChild);
 		}
+		
+		if (childCount > 0)
+		{
+			// children may have been removed above
+			childCount = model.getChildCount(cell);
+		}
+		
+		String value = String.valueOf(model.getValue(cell));
+		String style = model.getStyle(cell);
 
-		return null;
+		if (childCount == 0 && model.isVertex(cell))
+		{
+			if ((model.getValue(cell) == null || value.isEmpty()) &&
+					(style != null) &&
+					(style.contains(mxConstants.STYLE_FILLCOLOR + "=none")) &&
+					(style.contains(mxConstants.STYLE_STROKECOLOR + "=none")) &&
+					(!style.contains("image=")))
+			{
+				// Leaf vertex, nothing rendered, no label, remove it
+
+				return true;
+			}
+		}
+		
+		return false;
 	}
 }

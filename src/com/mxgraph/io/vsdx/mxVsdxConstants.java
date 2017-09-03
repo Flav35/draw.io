@@ -20,10 +20,18 @@ public class mxVsdxConstants
 	public static String BOTTOM_MARGIN = "BottomMargin";
 	public static String BULLET = "Bullet";
 	public static String CASE = "Case";
-	public static String CHAR = "Char";
+	public static String CHARACTER = "Character";
 	public static String COLOR = "Color";
 	public static String COLOR_ENTRY = "ColorEntry";
 	public static String COLORS = "Colors";
+	
+	/**
+	 * Specifies the color transparency used for characters in a text run.
+	 * The value is normalized such that a value of 1 corresponds to 100 percent.
+	 * A value of zero specifies that the color is completely opaque;
+	 * a value of one specifies that the color is completely transparent.
+	 */
+	public static String COLOR_TRANS = "ColorTrans";
 	public static String CONNECT = "Connect";
 	public static String CONNECTS = "Connects";
 	public static String CONNECTION = "Connection";
@@ -46,6 +54,7 @@ public class mxVsdxConstants
 	public static String FILL_FOREGND_TRANS = "FillForegndTrans";
 	public static String FILL_PATTERN = "FillPattern";
 	public static String FILL_STYLE = "FillStyle";
+	public static String FILL_GRADIENT_ENABLED = "FillGradientEnabled";
 	public static String FLAGS = "Flags";
 	public static String FLIP_X = "FlipX";
 	public static String FLIP_Y = "FlipY";
@@ -85,7 +94,7 @@ public class mxVsdxConstants
 	public static String PAGE_HEIGHT = "PageHeight";
 	public static String PAGE_WIDTH = "PageWidth";
 	public static String PAGES = "Pages";
-	public static String PARAGRAPH = "Para";
+	public static String PARAGRAPH = "Paragraph";
 	public static String PIN_X = "PinX";
 	public static String PIN_Y = "PinY";
 	public static String POS = "Pos";
@@ -109,7 +118,6 @@ public class mxVsdxConstants
 	public static String TEXT_BKGND = "TextBkgnd";
 	public static String TEXT_BLOCK = "TextBlock";
 	public static String TEXT_STYLE = "TextStyle";
-	public static String TEXT_X_FORM = "TextXForm";
 	public static String TO_PART = "ToPart";
 	public static String TO_SHEET = "ToSheet";
 	public static String TOP_MARGIN = "TopMargin";
@@ -129,12 +137,13 @@ public class mxVsdxConstants
 	public static String WIDTH = "Width";
 	public static String X_CON = "XCon";
 	public static String X_DYN = "XDyn";
-	public static String X_FORM = "XForm";
-	public static String X_FORM_1D = "XForm1D";
 	public static String X = "X";
 	public static String Y_CON = "YCon";
 	public static String Y_DYN = "YDyn";
 	public static String Y = "Y";
+	public static String HIDE_TEXT = "HideText";
+	
+	public static String VSDX_ID = "vsdxID";
 	
 	public static int CONNECT_TO_PART_WHOLE_SHAPE = 3;
 	

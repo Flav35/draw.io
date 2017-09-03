@@ -13,7 +13,6 @@ import java.io.PrintWriter;
 import java.net.URLDecoder;
 import java.util.Arrays;
 import java.util.Hashtable;
-import java.util.List;
 import java.util.Map;
 
 import javax.servlet.ServletException;
@@ -25,17 +24,13 @@ import org.apache.commons.fileupload.FileItemIterator;
 import org.apache.commons.fileupload.FileItemStream;
 import org.apache.commons.fileupload.servlet.ServletFileUpload;
 import org.apache.commons.fileupload.util.Streams;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.Node;
+import org.apache.commons.lang3.StringEscapeUtils;
 
 import com.mxgraph.io.mxCodec;
 import com.mxgraph.io.mxGraphMlCodec;
 import com.mxgraph.io.mxVsdxCodec;
+import com.mxgraph.io.mxVssxCodec;
 import com.mxgraph.io.gliffy.importer.GliffyDiagramConverter;
-import com.mxgraph.model.mxIGraphModel;
-import com.mxgraph.util.mxRectangle;
-import com.mxgraph.util.mxUndoableEdit.mxUndoableChange;
 import com.mxgraph.util.mxXmlUtils;
 import com.mxgraph.view.mxGraph;
 import com.mxgraph.view.mxGraphHeadless;
@@ -51,14 +46,14 @@ public class OpenServlet extends HttpServlet
 	private static final long serialVersionUID = 1L;
 
 	/**
-	 * Global switch to enabled VDX support.
-	 */
-	public static boolean ENABLE_VDX_SUPPORT = true;
-
-	/**
 	 * Global switch to enabled VSDX support.
 	 */
 	public static boolean ENABLE_VSDX_SUPPORT = true;
+
+	/**
+	 * Global switch to enabled VSSX support.
+	 */
+	public static boolean ENABLE_VSSX_SUPPORT = true;
 
 	/**
 	 * Global switch to enabled Gliffy support.
@@ -113,8 +108,8 @@ public class OpenServlet extends HttpServlet
 				String filename = "";
 				String format = null;
 				String upfile = null;
-				boolean vdx = false;
 				boolean vsdx = false;
+				boolean vssx = false;
 
 				ServletFileUpload upload = new ServletFileUpload();
 				FileItemIterator iterator = upload.getItemIterator(request);
@@ -132,12 +127,12 @@ public class OpenServlet extends HttpServlet
 					else if (name.equals("upfile"))
 					{
 						filename = item.getName();
-						vdx = filename.toLowerCase().endsWith(".vdx");
 						vsdx = filename.toLowerCase().endsWith(".vsdx");
-						
-						if (vsdx)
+						vssx = filename.toLowerCase().endsWith(".vssx");
+
+						if (vsdx || vssx)
 						{
-							upfile = Streams.asString(stream, "ISO-8859-1");  
+							upfile = Streams.asString(stream, "ISO-8859-1");
 						}
 						else
 						{
@@ -158,52 +153,39 @@ public class OpenServlet extends HttpServlet
 				}
 
 				String xml = null;
-				
+
 				if (filename.toLowerCase().endsWith(".png"))
 				{
-					xml = extractXmlFromPng(upfile
-							.getBytes(Utils.CHARSET_FOR_URL_ENCODING));
+					xml = extractXmlFromPng(
+							upfile.getBytes(Utils.CHARSET_FOR_URL_ENCODING));
 				}
 				else if (ENABLE_GRAPHML_SUPPORT && upfile.matches(graphMlRegex))
 				{
 					// Creates a graph that contains a model but does not validate
 					// since that is not needed for the model and not allowed on GAE
-					mxGraph graph = new mxGraph()
-					{
-						public mxRectangle graphModelChanged(mxIGraphModel sender,
-								List<mxUndoableChange> changes)
-						{
-							return null;
-						}
-					};
-					mxGraphMlCodec.decode(mxXmlUtils.parseXml(upfile), graph);
-					xml = mxXmlUtils.getXml(new mxCodec().encode(graph.getModel()));
-				}
-				else if (ENABLE_VDX_SUPPORT && (vdx || vsdx))
-				{
 					mxGraph graph = new mxGraphHeadless();
-					graph.setConstrainChildren(false);
+
+					mxGraphMlCodec.decode(mxXmlUtils.parseXml(upfile), graph);
+					xml = mxXmlUtils
+							.getXml(new mxCodec().encode(graph.getModel()));
+				}
+				else if (ENABLE_VSDX_SUPPORT && vsdx)
+				{
 					mxVsdxCodec vdxCodec = new mxVsdxCodec();
+					xml = vdxCodec.decodeVsdx(upfile.getBytes("ISO-8859-1"),
+							Utils.CHARSET_FOR_URL_ENCODING);
 
-					if (vdx)
-					{
-						Document doc = mxXmlUtils.parseXml(upfile);
-						//vdxCodec.decode(doc, graph);
-					}
-					else if (vsdx)
-					{
-						vdxCodec.decodeVsdx(
-								upfile.getBytes("ISO-8859-1"),
-								graph, Utils.CHARSET_FOR_URL_ENCODING);
-					}
+					// Replaces VSDX extension
+					int dot = filename.lastIndexOf('.');
+					filename = filename.substring(0, dot + 1) + "xml";
+				}
+				else if (ENABLE_VSSX_SUPPORT && vssx)
+				{
+					mxVssxCodec vssxCodec = new mxVssxCodec();
+					xml = vssxCodec.decodeVssx(upfile.getBytes("ISO-8859-1"),
+							Utils.CHARSET_FOR_URL_ENCODING);
 
-					mxCodec codec = new mxCodec();
-					Node node = codec.encode(graph.getModel());
-					// Specifies new stylesheet to be used
-					((Element) node).setAttribute("style", "default-style2");
-					xml = mxXmlUtils.getXml(node);
-
-					// Replaces VDX extension
+					// Replaces VSDX extension
 					int dot = filename.lastIndexOf('.');
 					filename = filename.substring(0, dot + 1) + "xml";
 				}
@@ -232,10 +214,12 @@ public class OpenServlet extends HttpServlet
 					{
 						// Workaround for replacement char and null byte in IE9 request
 						xml = xml.replaceAll("[\\uFFFD\\u0000]*", "");
-						writeScript(writer, "try{window.parent.setCurrentXml(decodeURIComponent('"
-							+ Utils.encodeURIComponent(xml, Utils.CHARSET_FOR_URL_ENCODING)
-							+ "'), decodeURIComponent('" + Utils.encodeURIComponent(filename, Utils.CHARSET_FOR_URL_ENCODING)
-							+ "'));}catch(e){window.parent.showOpenAlert({message:window.parent.mxResources.get('notAUtf8File')});}");
+						writeScript(writer,
+								"try{window.parent.setCurrentXml(decodeURIComponent('"
+										+ encodeString(xml)
+										+ "'), decodeURIComponent('"
+										+ encodeString(filename)
+										+ "'));}catch(e){window.parent.showOpenAlert({message:window.parent.mxResources.get('notAUtf8File')});}");
 					}
 				}
 				else
@@ -245,9 +229,9 @@ public class OpenServlet extends HttpServlet
 			}
 			else
 			{
-				response.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
-				writeScript(
-						writer,
+				response.setStatus(
+						HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
+				writeScript(writer,
 						"window.parent.showOpenAlert(window.parent.mxResources.get('drawingTooLarge'));");
 			}
 		}
@@ -255,14 +239,22 @@ public class OpenServlet extends HttpServlet
 		{
 			e.printStackTrace();
 			response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-			writeScript(
-					writer,
+			writeScript(writer,
 					"window.parent.showOpenAlert(window.parent.mxResources.get('invalidOrMissingFile'));");
 		}
 
 		writer.flush();
 		writer.close();
 	}
+
+	/**
+	 * URI encodes the given string for JavaScript.
+	 */
+	protected String encodeString(String s)
+	{
+		return StringEscapeUtils.escapeEcmaScript(
+				Utils.encodeURIComponent(s, Utils.CHARSET_FOR_URL_ENCODING));
+	};
 
 	/**
 	 * Writes the given string as a script in a HTML page to the given print writer.
@@ -281,8 +273,8 @@ public class OpenServlet extends HttpServlet
 	// NOTE: Key length must not be longer than 79 bytes (not checked)
 	protected String extractXmlFromPng(byte[] data)
 	{
-		Map<String, String> textChunks = decodeCompressedText(new ByteArrayInputStream(
-				data));
+		Map<String, String> textChunks = decodeCompressedText(
+				new ByteArrayInputStream(data));
 
 		return (textChunks != null) ? textChunks.get("mxGraphModel") : null;
 	}

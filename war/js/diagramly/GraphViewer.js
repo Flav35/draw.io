@@ -3,22 +3,99 @@
  */
 /**
  * No CSS and resources available in embed mode. Parameters and docs:
- * https://support.draw.io/pages/viewpage.action?pageId=12878123
+ * https://desk.draw.io/solution/articles/16000042542-how-to-embed-html-
  */
 GraphViewer = function(container, xmlNode, graphConfig)
 {
+	this.init(container, xmlNode, graphConfig);
+};
+
+// Editor inherits from mxEventSource
+mxUtils.extend(GraphViewer, mxEventSource);
+
+/**
+ * Redirects editing to absolue URLs.
+ */
+GraphViewer.prototype.editBlankUrl = 'https://www.draw.io/?client=1';
+
+/**
+ * Redirects editing to absolue URLs.
+ */
+GraphViewer.prototype.editBlankFallbackUrl = 'https://www.draw.io/?create=drawdata&splash=0';
+
+/**
+ * Base URL for relative images.
+ */
+GraphViewer.prototype.imageBaseUrl = 'https://www.draw.io/';
+
+/**
+ * Redirects editing to absolue URLs.
+ */
+GraphViewer.prototype.toolbarHeight = (document.compatMode == 'BackCompat') ? 28 : 30;
+
+/**
+ * Redirects editing to absolue URLs.
+ */
+GraphViewer.prototype.lightboxChrome = true;
+
+/**
+ * Redirects editing to absolue URLs.
+ */
+GraphViewer.prototype.lightboxZIndex = 999;
+
+/**
+ * Redirects editing to absolue URLs.
+ */
+GraphViewer.prototype.toolbarZIndex = 999;
+
+/**
+ * Base URL for relative images.
+ */
+GraphViewer.prototype.imageBaseUrl = 'https://www.draw.io/';
+
+/**
+ * If automatic fit should be enabled if zoom is disabled. Default is true.
+ */
+GraphViewer.prototype.autoFit = true;
+
+/**
+ * Specifies if zooming in for auto fit is allowed. Default is false.
+ */
+GraphViewer.prototype.allowZoomIn = false;
+
+/**
+ * Whether the title should be shown as a tooltip if the toolbar is disabled.
+ * Default is false.
+ */
+GraphViewer.prototype.showTitleAsTooltip = false;
+
+/**
+ * Specifies if the constructur should delay the rendering if the container
+ * is not visible by default.
+ */
+GraphViewer.prototype.checkVisibleState = true;
+
+/**
+ * Initializes the viewer.
+ */
+GraphViewer.prototype.init = function(container, xmlNode, graphConfig)
+{
 	this.graphConfig = (graphConfig != null) ? graphConfig : {};
-	this.autoFit = (graphConfig['auto-fit'] != null) ?
-		graphConfig['auto-fit'] : this.autoFit;
-	this.checkVisibleState = (graphConfig['check-visible-state'] != null) ?
-		graphConfig['check-visible-state'] : this.checkVisibleState;
+	this.autoFit = (this.graphConfig['auto-fit'] != null) ?
+		this.graphConfig['auto-fit'] : this.autoFit;
+	this.allowZoomIn = (this.graphConfig['allow-zoom-in'] != null) ?
+		this.graphConfig['allow-zoom-in'] : this.allowZoomIn;
+	this.checkVisibleState = (this.graphConfig['check-visible-state'] != null) ?
+		this.graphConfig['check-visible-state'] : this.checkVisibleState;
 	this.toolbarItems = (this.graphConfig.toolbar != null) ?
 		this.graphConfig.toolbar.split(' ') : [];
 	this.zoomEnabled = mxUtils.indexOf(this.toolbarItems, 'zoom') >= 0;
 	this.layersEnabled = mxUtils.indexOf(this.toolbarItems, 'layers') >= 0;
 	this.lightboxEnabled = mxUtils.indexOf(this.toolbarItems, 'lightbox') >= 0;
 	this.lightboxClickEnabled = this.graphConfig.lightbox != false;
-	this.widthIsEmpty = (container != null) ? container.style.width == '' : true;
+	this.initialWidth = (container != null) ? container.style.width : null;
+	this.widthIsEmpty = (this.initialWidth != null) ? this.initialWidth == '' : true;
+	this.currentPage = parseInt(this.graphConfig.page) || 0;
 	this.editor = null;
 
 	if (xmlNode != null)
@@ -67,40 +144,79 @@ GraphViewer = function(container, xmlNode, graphConfig)
 			if (mxClient.IS_SVG)
 			{
 				// LATER: Add shadow for labels in graph.container (eg. math, NO_FO), scaling
-				this.editor.addSvgShadow(this.graph.view.canvas.ownerSVGElement, null, true);
+				this.editor.graph.addSvgShadow(this.graph.view.canvas.ownerSVGElement, null, true);
 			}
 			
 			// Adds page placeholders
-			var pagenumber = this.graphConfig.page || 0;
-			
 			if (xmlNode.nodeName == 'mxfile')
 			{
 				var diagrams = xmlNode.getElementsByTagName('diagram');
 				
 				if (diagrams.length > 0)
 				{
-					var diagram = diagrams[pagenumber];
 					var graphGetGlobalVariable = this.graph.getGlobalVariable;
+					var self = this;
 					
 					this.graph.getGlobalVariable = function(name)
 					{
+						var diagram = diagrams[self.currentPage];
+						
 						if (name == 'page')
 						{
-							return diagram.getAttribute('name') || 'Page-' + (pagenumber + 1);
+							return diagram.getAttribute('name') || 'Page-' + (self.currentPage + 1);
 						}
 						else if (name == 'pagenumber')
 						{
-							return pagenumber + 1;
+							return self.currentPage + 1;
 						}
 						
 						return graphGetGlobalVariable.apply(this, arguments);
 					};
 				}
 			}
-	
+			
+			this.diagrams = [];
+			var lastXmlNode = null;
+			
+			this.selectPage = function(number)
+			{
+				this.currentPage = mxUtils.mod(number, this.diagrams.length);
+				this.updateGraphXml(mxUtils.parseXml(this.graph.decompress(mxUtils.getTextContent(
+					this.diagrams[this.currentPage]))).documentElement);
+			};
+			
+			this.selectPageById = function(id)
+			{
+				for (var i = 0; i < this.diagrams.length; i++)
+				{
+					if (this.diagrams[i].getAttribute('id') == id)
+					{
+						this.selectPage(i);
+						break;
+					}
+				}
+			};
+			
+			var update = mxUtils.bind(this, function()
+			{
+				if (this.xmlNode == null || this.xmlNode.nodeName != 'mxfile')
+				{
+					this.diagrams = [];
+				}
+				if (this.xmlNode != lastXmlNode)
+				{
+					this.diagrams = this.xmlNode.getElementsByTagName('diagram');
+					lastXmlNode = this.xmlNode;
+				}
+			});
+			
+			// LATER: Add event for setGraphXml
+			this.addListener('xmlNodeChanged', update);
+			update();
+
 			// Passes current page via urlParams global variable
 			// to let the parser know which page we're using
-			urlParams['page'] = pagenumber;
+			urlParams['page'] = self.currentPage;
 			
 			var render = mxUtils.bind(this, function()
 			{
@@ -111,7 +227,7 @@ GraphViewer = function(container, xmlNode, graphConfig)
 					urlParams['nav'] = (this.graphConfig.nav != false) ? '1' : '0';
 					
 					this.editor.setGraphXml(this.xmlNode);
-					this.graph.border = this.graphConfig.border || 8;
+					this.graph.border = (this.graphConfig.border != null) ? this.graphConfig.border : 8;
 					this.graph.view.scale = this.graphConfig.zoom || 1;
 				}
 				finally
@@ -139,33 +255,40 @@ GraphViewer = function(container, xmlNode, graphConfig)
 					translate: this.graph.view.translate.clone(),
 					scale: this.graph.view.scale
 				};
-		
+
 				if (this.graphConfig.toolbar != null)
 				{
 					this.addToolbar();
 				}
-				else if (this.graphConfig.title != null)
+				else if (this.graphConfig.title != null && this.showTitleAsTooltip)
 				{
 					container.setAttribute('title', this.graphConfig.title);
 				}
 			});
+
+			var MutObs = window.MutationObserver ||
+				window.WebKitMutationObserver ||
+				window.MozMutationObserver;
 			
-			if (this.checkVisibleState && container.offsetWidth == 0)
+			if (this.checkVisibleState && container.offsetWidth == 0 && typeof MutObs !== 'undefined')
 			{
-				// Finds first parent with valid offset width or uses the document body
-				// LATER: In some cases a closer ancestor may result in better performance
-				// KNOWN: Possible side-effect of setting relative position on body
-				var resizeSensor = new ResizeSensor(this.getVisibleParent(container), function()
+				// Delayed rendering if inside hidden container and event available
+				var par = this.getObservableParent(container);
+			
+				var observer = new MutObs(mxUtils.bind(this, function(mutation)
 				{
 					if (container.offsetWidth > 0)
 					{
-						resizeSensor.detach();
+						observer.disconnect();
 						render();
 					}
-				});
+				}));
+				
+				observer.observe(par, {attributes: true});
 			}
 			else
 			{
+				// Immediate rendering in all other cases
 				render();
 			}
 		}
@@ -173,64 +296,14 @@ GraphViewer = function(container, xmlNode, graphConfig)
 };
 
 /**
- * Redirects editing to absolue URLs.
- */
-GraphViewer.prototype.editBlankUrl = 'https://www.draw.io/?client=1';
-
-/**
- * Redirects editing to absolue URLs.
- */
-GraphViewer.prototype.editBlankFallbackUrl = 'https://www.draw.io/?create=drawdata&splash=0';
-
-/**
- * Base URL for relative images.
- */
-GraphViewer.prototype.imageBaseUrl = 'https://www.draw.io/';
-
-/**
- * Redirects editing to absolue URLs.
- */
-GraphViewer.prototype.toolbarHeight = (document.compatMode == 'BackCompat') ? 28 : 30;
-
-/**
- * Redirects editing to absolue URLs.
- */
-GraphViewer.prototype.lightboxChrome = true;
-
-/**
- * Redirects editing to absolue URLs.
- */
-GraphViewer.prototype.lightboxZIndex = 999;
-
-/**
- * Redirects editing to absolue URLs.
- */
-GraphViewer.prototype.toolbarZIndex = 999;
-
-/**
- * Base URL for relative images.
- */
-GraphViewer.prototype.imageBaseUrl = 'https://www.draw.io/';
-
-/**
- * If automatic fit should be enabled if zoom is disabled. Default is true.
- */
-GraphViewer.prototype.autoFit = true;
-
-/**
- * Specifies if the constructur should delay the rendering if the container
- * is not visible by default.
- */
-GraphViewer.prototype.checkVisibleState = true;
-
-/**
  * 
  */
-GraphViewer.prototype.getVisibleParent = function(container)
+GraphViewer.prototype.getObservableParent = function(container)
 {
-	var node = container;
+	var node = container.parentNode;
 	
-	while (node != document.body && node.parentNode != null && node.offsetWidth == 0)
+	while (node != document.body && node.parentNode != null &&
+		mxUtils.getCurrentStyle(node).display !== 'none')
 	{
 		node = node.parentNode;
 	}
@@ -260,28 +333,64 @@ GraphViewer.prototype.getImageUrl = function(url)
 /**
  * 
  */
-GraphViewer.prototype.updateGraphXml = function(xmlNode)
+GraphViewer.prototype.setXmlNode = function(xmlNode)
 {
 	this.xmlDocument = xmlNode.ownerDocument;
 	this.xml = mxUtils.getXml(xmlNode);
 	this.xmlNode = xmlNode;
 	
+	this.updateGraphXml(xmlNode);
+	this.fireEvent(new mxEventObject('xmlNodeChanged'));
+};
+
+/**
+ * 
+ */
+GraphViewer.prototype.setFileNode = function(xmlNode)
+{
+	if (this.xmlNode == null)
+	{
+		this.xmlDocument = xmlNode.ownerDocument;
+		this.xml = mxUtils.getXml(xmlNode);
+		this.xmlNode = xmlNode;
+	}
+	
+	this.setGraphXml(xmlNode);
+};
+
+/**
+ * 
+ */
+GraphViewer.prototype.updateGraphXml = function(xmlNode)
+{
+	this.setGraphXml(xmlNode);
+	this.fireEvent(new mxEventObject('graphChanged'));
+};
+
+/**
+ * 
+ */
+GraphViewer.prototype.setGraphXml = function(xmlNode)
+{
 	if (this.graph != null)
 	{
 		this.graph.view.translate = new mxPoint();
 		this.graph.view.scale = 1;
 		this.graph.getModel().clear();
-		
+		this.editor.setGraphXml(xmlNode);
+				
 		// Restores initial CSS state
 		if (this.widthIsEmpty)
 		{
 			this.graph.container.style.width = '';
 			this.graph.container.style.height = '';
 		}
+		else
+		{
+			this.graph.container.style.width = this.initialWidth;
+		}
 		
-		this.editor.setGraphXml(this.xmlNode);
 		this.positionGraph();
-		
 		this.graph.initialViewState = {
 			translate: this.graph.view.translate.clone(),
 			scale: this.graph.view.scale
@@ -364,7 +473,8 @@ GraphViewer.prototype.addSizeHandler = function()
 			{
 				handlingResize = true;
 
-				this.graph.maxFitScale = (maxScale != null) ? maxScale : (this.graphConfig.zoom || 1);
+				this.graph.maxFitScale = (maxScale != null) ? maxScale : (this.graphConfig.zoom ||
+					((this.allowZoomIn) ? null : 1));
 				this.graph.fit(null, null, null, null, false, true);
 				this.graph.maxFitScale = null;
 				
@@ -408,7 +518,7 @@ GraphViewer.prototype.addSizeHandler = function()
 		// Sets initial size for responsive diagram to stop at actual size
 		if (this.widthIsEmpty)
 		{
-			container.style.width = bounds.width + 2 * this.graph.border + 'px';
+			this.updateContainerWidth(container, bounds.width + 2 * this.graph.border);
 		}
 		
 		this.updateContainerHeight(container, bounds.height + 2 * this.graph.border + 1);
@@ -454,9 +564,10 @@ GraphViewer.prototype.addSizeHandler = function()
 		{
 			container.style.minWidth = '100%';
 		}
-
-		if (bounds.width + 2 * this.graph.border > container.offsetWidth ||
-			bounds.height + 2 * this.graph.border > this.graphConfig['max-height'])
+		
+		if (container.offsetWidth > 0 && (this.allowZoomIn ||
+			(bounds.width + 2 * this.graph.border > container.offsetWidth ||
+			bounds.height + 2 * this.graph.border > this.graphConfig['max-height'])))
 		{
 			var maxScale = null;
 			
@@ -493,6 +604,14 @@ GraphViewer.prototype.addSizeHandler = function()
 		lastOffsetWidth = null;
 		positionGraph();
 	};
+};
+
+/**
+ * 
+ */
+GraphViewer.prototype.updateContainerWidth = function(container, width)
+{
+	container.style.width = width + 'px';
 };
 
 /**
@@ -708,6 +827,9 @@ GraphViewer.prototype.addToolbar = function()
 		});
 	}
 	
+	var tokens = this.toolbarItems;
+	var buttonCount = 0;
+	
 	function addButton(fn, imgSrc, tip, enabled)
 	{
 		var a = document.createElement('div');
@@ -761,17 +883,55 @@ GraphViewer.prototype.addToolbar = function()
 		return a;
 	};
 
-	var buttonCount = 0;
-	var tokens = this.toolbarItems;
-
 	var layersDialog = null;
 	var layersDialogEntered = false;
-
+	var pageInfo = null;
+	
 	for (var i = 0; i < tokens.length; i++)
 	{
 		var token = tokens[i];
 		
-		if (token == 'zoom')
+		if (token == 'pages')
+		{
+			pageInfo = container.ownerDocument.createElement('div');
+			pageInfo.style.cssText = 'display:inline-block;position:relative;padding:3px 4px 0 4px;' +
+				'vertical-align:top;font-family:Helvetica,Arial;font-size:12px;top:4px;cursor:default;'
+			mxUtils.setOpacity(pageInfo, 70);
+			
+			var prevButton = addButton(mxUtils.bind(this, function()
+			{
+				this.selectPage(this.currentPage - 1);
+			}), Editor.previousImage, mxResources.get('previousPage') || 'Previous Page');
+
+			prevButton.style.borderRightStyle = 'none';
+			prevButton.style.paddingLeft = '0px';
+			prevButton.style.paddingRight = '0px';
+			toolbar.appendChild(pageInfo);
+
+			var nextButton = addButton(mxUtils.bind(this, function()
+			{
+				this.selectPage(this.currentPage + 1);
+			}), Editor.nextImage, mxResources.get('nextPage') || 'Next Page');
+			
+			nextButton.style.paddingLeft = '0px';
+			nextButton.style.paddingRight = '0px';
+			
+			var lastXmlNode = null;
+			
+			var update = mxUtils.bind(this, function()
+			{
+				pageInfo.innerHTML = '';
+				mxUtils.write(pageInfo, (this.currentPage + 1) + ' / ' + this.diagrams.length);
+				pageInfo.style.display = (this.diagrams.length > 1) ? 'inline-block' : 'none';
+				prevButton.style.display = pageInfo.style.display;
+				nextButton.style.display = pageInfo.style.display;
+			});
+			
+			// LATER: Add event for setGraphXml
+			this.addListener('graphChanged', update);
+			update();
+		}
+		else if (token == 'zoom')
 		{
 			if (this.zoomEnabled)
 			{
@@ -785,7 +945,7 @@ GraphViewer.prototype.addToolbar = function()
 					this.graph.zoomIn();
 				}), Editor.zoomInImage, mxResources.get('zoomIn') || 'Zoom In');
 
-				var a = addButton(mxUtils.bind(this, function()
+				addButton(mxUtils.bind(this, function()
 				{
 					this.graph.view.scaleAndTranslate(this.graph.initialViewState.scale,
 						this.graph.initialViewState.translate.x,
@@ -798,44 +958,48 @@ GraphViewer.prototype.addToolbar = function()
 			if (this.layersEnabled)
 			{
 				var model = this.graph.getModel();
-				var childCount = model.getChildCount(model.root);
-				
-				if (childCount > 1)
+
+				var layersButton = addButton(mxUtils.bind(this, function(evt)
 				{
-					var layersButton = addButton(mxUtils.bind(this, function(evt)
+					if (layersDialog != null)
 					{
-						if (layersDialog != null)
+						layersDialog.parentNode.removeChild(layersDialog);
+						layersDialog = null;
+					}
+					else
+					{
+						layersDialog = this.graph.createLayersDialog();
+						
+						mxEvent.addListener(layersDialog, 'mouseleave', function()
 						{
 							layersDialog.parentNode.removeChild(layersDialog);
 							layersDialog = null;
-						}
-						else
-						{
-							layersDialog = this.graph.createLayersDialog();
-							
-							mxEvent.addListener(layersDialog, 'mouseleave', function()
-							{
-								layersDialog.parentNode.removeChild(layersDialog);
-								layersDialog = null;
-							});
-							
-							var r = layersButton.getBoundingClientRect();
+						});
+						
+						var r = layersButton.getBoundingClientRect();
 
-							layersDialog.style.width = '140px';
-							layersDialog.style.padding = '2px 0px 2px 0px';
-							layersDialog.style.border = '1px solid #d0d0d0';
-							layersDialog.style.backgroundColor = '#eee';
-							layersDialog.style.fontFamily = 'Helvetica Neue,Helvetica,Arial Unicode MS,Arial';
-							layersDialog.style.fontSize = '11px';
-							mxUtils.setOpacity(layersDialog, 80);
-							var origin = mxUtils.getDocumentScrollOrigin(document);
-							layersDialog.style.left = origin.x + r.left + 'px';
-							layersDialog.style.top = origin.y + r.bottom + 'px';
-							
-							document.body.appendChild(layersDialog);
-						}
-					}), Editor.layersImage, mxResources.get('layers') || 'Layers');
-				}
+						layersDialog.style.width = '140px';
+						layersDialog.style.padding = '2px 0px 2px 0px';
+						layersDialog.style.border = '1px solid #d0d0d0';
+						layersDialog.style.backgroundColor = '#eee';
+						layersDialog.style.fontFamily = 'Helvetica Neue,Helvetica,Arial Unicode MS,Arial';
+						layersDialog.style.fontSize = '11px';
+						layersDialog.style.zIndex = this.toolbarZIndex + 1;
+						mxUtils.setOpacity(layersDialog, 80);
+						var origin = mxUtils.getDocumentScrollOrigin(document);
+						layersDialog.style.left = origin.x + r.left + 'px';
+						layersDialog.style.top = origin.y + r.bottom + 'px';
+						
+						document.body.appendChild(layersDialog);
+					}
+				}), Editor.layersImage, mxResources.get('layers') || 'Layers');
+				
+				model.addListener(mxEvent.CHANGE, function()
+				{
+					layersButton.style.display = (model.getChildCount(model.root) > 1) ? 'inline-block' : 'none';
+				});
+				
+				layersButton.style.display = (model.getChildCount(model.root) > 1) ? 'inline-block' : 'none';
 			}
 		}
 		else if (token == 'lightbox')
@@ -845,7 +1009,7 @@ GraphViewer.prototype.addToolbar = function()
 				addButton(mxUtils.bind(this, function()
 				{
 					this.showLightbox();
-				}), Editor.maximizeImage, mxResources.get('show') || 'Show');
+				}), Editor.maximizeImage, (mxResources.get('show') || 'Show'));
 			}
 		}
 		else if (this.graphConfig['toolbar-buttons'] != null)
@@ -969,23 +1133,50 @@ GraphViewer.prototype.addToolbar = function()
  */
 GraphViewer.prototype.addClickHandler = function(graph, ui)
 {
-	var isBlankLink = graph.isBlankLink;
-	var config = this.graphConfig;
-	
-	graph.isBlankLink = function(href)
+	graph.linkPolicy = this.graphConfig.target || graph.linkPolicy;
+
+	graph.addClickHandler(this.graphConfig.highlight, mxUtils.bind(this, function(evt, href)
 	{
-		return config.target != 'self' && isBlankLink.apply(this, arguments);
-	};
-	
-	graph.addClickHandler(this.graphConfig.highlight, function(evt)
-	{
+		if (href == null)
+		{
+			var source = mxEvent.getSource(evt);
+		
+			if (source.nodeName.toLowerCase() == 'a')
+			{
+				href = source.getAttribute('href');
+			}
+		}
+		
 		if (ui != null)
 		{
-			ui.destroy();
+			if (href != null && !(graph.isExternalProtocol(href) || graph.isBlankLink(href)))
+			{
+				// Hides lightbox if any links are clicked
+				// Async handling needed for anchors to work
+				window.setTimeout(function()
+				{
+					ui.destroy();
+				}, 0);
+			}
 		}
-	}, mxUtils.bind(this, function(evt)
+		else
+		{
+			if (href != null && graph.isPageLink(href))
+			{
+				var comma = href.indexOf(',');
+				
+				if (comma > 0)
+				{
+					var id = href.substring(comma + 1);
+					this.selectPageById(id);
+					mxEvent.consume(evt);
+				}
+			}
+		}
+	}), mxUtils.bind(this, function(evt)
 	{
-		if (ui == null && this.lightboxClickEnabled && (!mxEvent.isTouchEvent(evt) ||
+		if (ui == null && this.lightboxClickEnabled &&
+			(!mxEvent.isTouchEvent(evt) ||
 			this.toolbarItems.length == 0))
 		{
 			this.showLightbox();
@@ -1000,7 +1191,8 @@ GraphViewer.prototype.showLightbox = function()
 {
 	if (this.graphConfig.lightbox == 'open' || window.self !== window.top)
 	{
-		var p = (this.layersEnabled) ? '&layers=1' : '';
+		var url = 'https://www.draw.io/?client=1&lightbox=1&close=1&edit=_blank&target=blank';
+		url += (this.layersEnabled) ? '&layers=1' : '';
 		
 		if (typeof window.postMessage !== 'undefined' && (document.documentMode == null || document.documentMode >= 10))
 		{
@@ -1016,13 +1208,13 @@ GraphViewer.prototype.showLightbox = function()
 			});
 			
 			mxEvent.addListener(window, 'message', receive);
-			wnd = window.open('https://test.draw.io/?dev=1&client=1&chrome=0&lightbox=1&close=1&edit=_blank' + p);
+			wnd = window.open(url);
 		}
 		else
 		{
 			// Data is pulled from global variable after tab loads
 			window.drawdata = this.xml;
-			window.open('https://test.draw.io/?dev=1&client=1&chrome=0&lightbox=1&edit=_blank' + p);
+			window.open(url);
 		}
 	}
 	else
@@ -1039,7 +1231,6 @@ GraphViewer.prototype.showLocalLightbox = function()
 {
 	var origin = mxUtils.getDocumentScrollOrigin(document);
 	var backdrop = document.createElement('div');
-	var tabContainer = null;
 
 	if (mxClient.IS_QUIRKS)
 	{
@@ -1083,7 +1274,8 @@ GraphViewer.prototype.showLocalLightbox = function()
 	});
 	
 	// LATER: Make possible to assign after instance was created
-	urlParams['page'] = this.graphConfig.page || 0;
+	urlParams['pages'] = '1';
+	urlParams['page'] = this.currentPage;
 	urlParams['nav'] = (this.graphConfig.nav != false) ? '1' : '0';
 	urlParams['layers'] = (this.layersEnabled) ? '1' : '0';
 	
@@ -1097,20 +1289,45 @@ GraphViewer.prototype.showLocalLightbox = function()
 	EditorUi.prototype.addBeforeUnloadListener = function() {};
 	EditorUi.prototype.addChromelessClickHandler = function() {};
 	
+	// Workaround for lost reference with same ID (cannot override after instance is created)
+	Graph.prototype.shadowId = 'lightboxDropShadow';
+	
 	var ui = new EditorUi(new Editor(true), document.createElement('div'), true);
+	
+	// Workaround for lost reference with same ID
+	Graph.prototype.shadowId = 'dropShadow';
 	
 	// Disables refresh
 	ui.refresh = function() {};
 	
-	var param = (this.graphConfig.page != null) ? '&page=' + this.graphConfig.page : '';
-	ui.editor.editBlankUrl = this.editBlankUrl + param;
-	ui.editor.editBlankFallbackUrl = this.editBlankFallbackUrl + param;
-
+	// Click on backdrop closes lightbox
 	mxEvent.addListener(backdrop, 'click', function()
 	{
 		ui.destroy();
 	});
 	
+	// Passes current page and local URLs to open in new window action
+	ui.editor.editBlankUrl = this.editBlankUrl;
+	ui.editor.editBlankFallbackUrl = this.editBlankFallbackUrl;
+	var editorGetEditBlankUrl = ui.editor.getEditBlankUrl;
+	
+	ui.editor.getEditBlankUrl = function(params, fallback)
+	{
+		var param = '';
+		
+		if (ui.pages != null && ui.currentPage != null)
+		{
+			var pageIndex = mxUtils.indexOf(ui.pages, ui.currentPage);
+		
+			if (pageIndex > 0)
+			{
+				param = '&page=' + pageIndex;
+			}
+		}
+		
+		return editorGetEditBlankUrl.apply(this, arguments) + param;
+	}
+
 	// Handles escape keystroke
 	var keydownHandler = mxUtils.bind(this, function(evt)
 	{
@@ -1126,12 +1343,6 @@ GraphViewer.prototype.showLocalLightbox = function()
 		mxEvent.removeListener(document.documentElement, 'keydown', keydownHandler);
 		document.body.removeChild(backdrop);
 		document.body.removeChild(closeImg);
-		
-		if (tabContainer != null)
-		{
-			document.body.removeChild(tabContainer);
-		}
-		
 		document.body.style.overflow = 'auto';
 		GraphViewer.resizeSensorEnabled = true;
 		
@@ -1162,6 +1373,21 @@ GraphViewer.prototype.showLocalLightbox = function()
 	graph.getImageFromBundles = function(key)
 	{
 		return self.getImageUrl(key);
+	};
+	
+	// Handles relative images in print output and temporary graphs
+	var uiCreateTemporaryGraph = ui.createTemporaryGraph;
+	
+	ui.createTemporaryGraph = function()
+	{
+		var graph = uiCreateTemporaryGraph.apply(this, arguments);
+		
+		graph.getImageFromBundles = function(key)
+		{
+			return self.getImageUrl(key);
+		};
+		
+		return graph;
 	};
 	
 	if (this.graphConfig.move)
@@ -1201,35 +1427,9 @@ GraphViewer.prototype.showLocalLightbox = function()
 		document.body.appendChild(closeImg);
 		
 		ui.setFileData(this.xml);
-		tabContainer = (ui.pages != null && ui.pages.length > 1) ? ui.tabContainer : null;
 
-		if (tabContainer != null)
-		{
-			if (mxClient.IS_QUIRKS)
-			{
-				tabContainer.style.position = 'absolute';
-				tabContainer.style.right = 32 + 'px';
-				tabContainer.style.top = origin.y + 32 + 'px';
-			}
-			else
-			{
-				// FIXME: Fix page menu CSS with sprite
-				// TODO: Update layers button after page change
-				tabContainer.style.fontFamily = 'Helvetica Neue,Helvetica,Arial Unicode MS,Arial';
-				tabContainer.style.position = 'fixed';
-				tabContainer.style.marginLeft = '40px';
-				tabContainer.style.marginRight = '40px';
-				tabContainer.style.bottom = '30px';
-				mxUtils.setPrefixedStyle(tabContainer.style, 'border-radius', '4px');
-			}
-			
-			tabContainer.style.zIndex = this.lightboxZIndex;
-			document.body.appendChild(tabContainer);
-			ui.updateTabContainer();
-		}
-		
 		mxUtils.setPrefixedStyle(lightbox.style, 'transform', 'rotateY(0deg)');
-		ui.chromelessToolbar.style.bottom = ((tabContainer != null) ? 80 : 60) + 'px';
+		ui.chromelessToolbar.style.bottom = 60 + 'px';
 		ui.chromelessToolbar.style.zIndex = this.lightboxZIndex;
 		
 		// Workaround for clipping in IE11-
@@ -1247,8 +1447,7 @@ GraphViewer.prototype.showLocalLightbox = function()
 			lightbox.style.left = origin.x + 'px';
 			lightbox.style.top = origin.y + 'px';
 			lightbox.style.width = document.body.clientWidth - 80 + 'px';
-			lightbox.style.height = document.body.clientHeight -
-				((tabContainer != null) ? 20 : 80) + 'px';
+			lightbox.style.height = document.body.clientHeight - 80 + 'px';
 			lightbox.style.backgroundColor = 'white';
 			
 			ui.chromelessToolbar.style.display = 'block';
@@ -1256,10 +1455,6 @@ GraphViewer.prototype.showLocalLightbox = function()
 			ui.chromelessToolbar.style.bottom = '';
 			ui.chromelessToolbar.style.top = origin.y +
 				document.body.clientHeight - 100 + 'px';
-		}
-		else if (tabContainer != null)
-		{
-			lightbox.style.marginBottom = '60px';
 		}
 		
 		ui.lightboxFit();
@@ -1434,7 +1629,15 @@ GraphViewer.initCss = function()
 			'background-color:#cccccc;',
 			'border:none;',
 			'height:1px;}',
-			'table.mxPopupMenu tr {	font-size:4pt;}'].join('\n');
+			'table.mxPopupMenu tr {	font-size:4pt;}',
+			// Modified to only apply to the print dialog
+			'.geDialog { font-family:Helvetica Neue,Helvetica,Arial Unicode MS,Arial;',
+			'font-size:10pt;',
+			'border:none;',
+			'margin:0px;}',
+			// These are required for the print dialog
+			'.geDialog {	position:absolute;	background:white;	overflow:hidden;	padding:30px;	border:1px solid #acacac;	-webkit-box-shadow:0px 0px 2px 2px #d5d5d5;	-moz-box-shadow:0px 0px 2px 2px #d5d5d5;	box-shadow:0px 0px 2px 2px #d5d5d5;	_filter:progid:DXImageTransform.Microsoft.DropShadow(OffX=2, OffY=2, Color=\'#d5d5d5\', Positive=\'true\');	z-index: 2;}.geDialogClose {	position:absolute;	width:9px;	height:9px;	opacity:0.5;	cursor:pointer;	_filter:alpha(opacity=50);}.geDialogClose:hover {	opacity:1;}.geDialogTitle {	box-sizing:border-box;	white-space:nowrap;	background:rgb(229, 229, 229);	border-bottom:1px solid rgb(192, 192, 192);	font-size:15px;	font-weight:bold;	text-align:center;	color:rgb(35, 86, 149);}.geDialogFooter {	background:whiteSmoke;	white-space:nowrap;	text-align:right;	box-sizing:border-box;	border-top:1px solid #e5e5e5;	color:darkGray;}',
+			'.geBtn {	background-color: #f5f5f5;	border-radius: 2px;	border: 1px solid #d8d8d8;	color: #333;	cursor: default;	font-size: 11px;	font-weight: bold;	height: 29px;	line-height: 27px;	margin: 0 0 0 8px;	min-width: 72px;	outline: 0;	padding: 0 8px;	cursor: pointer;}.geBtn:hover, .geBtn:focus {	-webkit-box-shadow: 0px 1px 1px rgba(0,0,0,0.1);	-moz-box-shadow: 0px 1px 1px rgba(0,0,0,0.1);	box-shadow: 0px 1px 1px rgba(0,0,0,0.1);	border: 1px solid #c6c6c6;	background-color: #f8f8f8;	background-image: linear-gradient(#f8f8f8 0px,#f1f1f1 100%);	color: #111;}.geBtn:disabled {	opacity: .5;}.gePrimaryBtn {	background-color: #4d90fe;	background-image: linear-gradient(#4d90fe 0px,#4787ed 100%);	border: 1px solid #3079ed;	color: #fff;}.gePrimaryBtn:hover, .gePrimaryBtn:focus {	background-color: #357ae8;	background-image: linear-gradient(#4d90fe 0px,#357ae8 100%);	border: 1px solid #2f5bb7;	color: #fff;}.gePrimaryBtn:disabled {	opacity: .5;}'].join('\n');
 		document.getElementsByTagName('head')[0].appendChild(style)
 	}
 	catch (e)
@@ -1444,20 +1647,32 @@ GraphViewer.initCss = function()
 };
 
 /**
+ * Lookup for URLs.
+ */
+GraphViewer.cachedUrls = {};
+
+/**
  * Workaround for unsupported CORS in IE9 XHR
  */
 GraphViewer.getUrl = function(url, onload, onerror)
 {
-	var xhr = (navigator.userAgent.indexOf('MSIE 9') > 0) ? new XDomainRequest() : new XMLHttpRequest();
-	xhr.open('GET', url);
-	
-    xhr.onload = function()
-    {
-    	onload((xhr.getText != null) ? xhr.getText() : xhr.responseText);
-	};
-	
-    xhr.onerror = onerror;
-    xhr.send();
+	if (GraphViewer.cachedUrls[url] != null)
+	{
+		onload(GraphViewer.cachedUrls[url]);
+	}
+	else
+	{
+		var xhr = (navigator.userAgent.indexOf('MSIE 9') > 0) ? new XDomainRequest() : new XMLHttpRequest();
+		xhr.open('GET', url);
+		
+	    xhr.onload = function()
+	    {
+	    	onload((xhr.getText != null) ? xhr.getText() : xhr.responseText);
+		};
+		
+	    xhr.onerror = onerror;
+	    xhr.send();
+	}
 };
 
 /**

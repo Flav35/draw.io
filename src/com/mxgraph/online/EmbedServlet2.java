@@ -19,10 +19,13 @@
  */
 package com.mxgraph.online;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.net.URL;
+import java.net.URLConnection;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -35,6 +38,8 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.commons.lang3.StringEscapeUtils;
+
 import com.google.appengine.api.utils.SystemProperty;
 
 /**
@@ -46,6 +51,16 @@ public class EmbedServlet2 extends HttpServlet
 	 * 
 	 */
 	private static final long serialVersionUID = 1L;
+
+	/**
+	 * 
+	 */
+	protected static String SHAPES_PATH = "/shapes";
+
+	/**
+	 * 
+	 */
+	protected static String STENCIL_PATH = "/stencils";
 
 	/**
 	 * 
@@ -81,7 +96,91 @@ public class EmbedServlet2 extends HttpServlet
 			lastModified = httpDateFormat.format(uploadDate);
 		}
 
-		EmbedServlet.initLibraries(libraries);
+		initLibraries(libraries);
+	}
+
+	/**
+	 * Sets up collection of stencils
+	 */
+	public static void initLibraries(HashMap<String, String[]> libraries)
+	{
+		libraries.put("mockup",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupButtons.js" });
+		libraries.put("arrows2", new String[] { SHAPES_PATH + "/mxArrows.js" });
+		libraries.put("bpmn",
+				new String[] { SHAPES_PATH + "/bpmn/mxBpmnShape2.js",
+						STENCIL_PATH + "/bpmn.xml" });
+		libraries.put("er", new String[] { SHAPES_PATH + "/er/mxER.js" });
+		libraries.put("ios",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupiOS.js" });
+		libraries.put("rackGeneral",
+				new String[] { SHAPES_PATH + "/rack/mxRack.js",
+						STENCIL_PATH + "/rack/general.xml" });
+		libraries.put("rackF5", new String[] { STENCIL_PATH + "/rack/f5.xml" });
+		libraries.put("lean_mapping",
+				new String[] { SHAPES_PATH + "/mxLeanMap.js",
+						STENCIL_PATH + "/lean_mapping.xml" });
+		libraries.put("basic", new String[] { SHAPES_PATH + "/mxBasic.js",
+				STENCIL_PATH + "/basic.xml" });
+		libraries.put("ios7icons",
+				new String[] { STENCIL_PATH + "/ios7/icons.xml" });
+		libraries.put("ios7ui",
+				new String[] { SHAPES_PATH + "/ios7/mxIOS7Ui.js",
+						STENCIL_PATH + "/ios7/misc.xml" });
+		libraries.put("android", new String[] { SHAPES_PATH + "/mxAndroid.js",
+				STENCIL_PATH + "electrical/transmission" });
+		libraries.put("electrical/transmission",
+				new String[] { SHAPES_PATH + "/mxElectrical.js",
+						STENCIL_PATH + "/electrical/transmission.xml" });
+		libraries.put("mockup/buttons",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupButtons.js" });
+		libraries.put("mockup/containers",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupContainers.js" });
+		libraries.put("mockup/forms",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupForms.js" });
+		libraries.put("mockup/graphics",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupGraphics.js",
+						STENCIL_PATH + "/mockup/misc.xml" });
+		libraries.put("mockup/markup",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupMarkup.js" });
+		libraries.put("mockup/misc",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupMisc.js",
+						STENCIL_PATH + "/mockup/misc.xml" });
+		libraries.put("mockup/navigation",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupNavigation.js",
+						STENCIL_PATH + "/mockup/misc.xml" });
+		libraries.put("mockup/text",
+				new String[] { SHAPES_PATH + "/mockup/mxMockupText.js" });
+		libraries.put("floorplan",
+				new String[] { SHAPES_PATH + "/mxFloorplan.js",
+						STENCIL_PATH + "/floorplan.xml" });
+		libraries.put("bootstrap",
+				new String[] { SHAPES_PATH + "/mxBootstrap.js",
+						STENCIL_PATH + "/bootstrap.xml" });
+		libraries.put("gmdl", new String[] { SHAPES_PATH + "/mxGmdl.js",
+				STENCIL_PATH + "/gmdl.xml" });
+		libraries.put("cabinets", new String[] { SHAPES_PATH + "/mxCabinets.js",
+				STENCIL_PATH + "/cabinets.xml" });
+		libraries.put("archimate",
+				new String[] { SHAPES_PATH + "/mxArchiMate.js" });
+		libraries.put("archimate3",
+				new String[] { SHAPES_PATH + "/mxArchiMate3.js" });
+		libraries.put("sysml", new String[] { SHAPES_PATH + "/mxSysML.js" });
+		libraries.put("eip", new String[] { SHAPES_PATH + "/mxEip.js",
+				STENCIL_PATH + "/eip.xml" });
+		libraries.put("networks", new String[] { SHAPES_PATH + "/mxNetworks.js",
+				STENCIL_PATH + "/networks.xml" });
+		libraries.put("aws3d", new String[] { SHAPES_PATH + "/mxAWS3D.js",
+				STENCIL_PATH + "/aws3d.xml" });
+		libraries.put("pid2inst",
+				new String[] { SHAPES_PATH + "/pid2/mxPidInstruments.js" });
+		libraries.put("pid2misc",
+				new String[] { SHAPES_PATH + "/pid2/mxPidMisc.js",
+						STENCIL_PATH + "/pid/misc.xml" });
+		libraries.put("pid2valves",
+				new String[] { SHAPES_PATH + "/pid2/mxPidValves.js" });
+		libraries.put("pidFlowSensors",
+				new String[] { STENCIL_PATH + "/pid/flow_sensors.xml" });
 	}
 
 	/**
@@ -105,7 +204,8 @@ public class EmbedServlet2 extends HttpServlet
 				// delivered by this servlet instance.
 				String modSince = request.getHeader("If-Modified-Since");
 
-				if (modSince != null && modSince.equals(lastModified))
+				if (modSince != null && modSince.equals(lastModified)
+						&& request.getParameter("fetch") == null)
 				{
 					response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
 				}
@@ -271,16 +371,51 @@ public class EmbedServlet2 extends HttpServlet
 		}
 
 		result.append("]");
-		
+
 		// LATER: Detect protocol of request in dev
 		// mode to avoid security errors
 		String proto = "https://";
 
+		String setCachedUrls = "";
+		String[] urls = request.getParameterValues("fetch");
+
+		if (urls != null)
+		{
+			HashSet<String> completed = new HashSet<String>();
+
+			for (int i = 0; i < urls.length; i++)
+			{
+				try
+				{
+					// Checks if URL already fetched to avoid duplicates
+					if (!completed.contains(urls[i]))
+					{
+						completed.add(urls[i]);
+						URL url = new URL(urls[i]);
+						URLConnection connection = url.openConnection();
+						ByteArrayOutputStream stream = new ByteArrayOutputStream();
+						Utils.copy(connection.getInputStream(), stream);
+						setCachedUrls += "GraphViewer.cachedUrls['"
+								+ StringEscapeUtils.escapeEcmaScript(urls[i])
+								+ "'] = decodeURIComponent('"
+								+ StringEscapeUtils.escapeEcmaScript(
+										Utils.encodeURIComponent(
+												stream.toString("UTF-8"),
+												Utils.CHARSET_FOR_URL_ENCODING))
+								+ "');";
+					}
+				}
+				catch (Exception e)
+				{
+					// ignore
+				}
+			}
+		}
+
 		// Installs a callback to load the stencils after the viewer was injected
-		return "window.onDrawioViewerLoad = function() {"
-				+ "mxStencilRegistry.parseStencilSets(" + result.toString() + ");"
-				+ js
-				+ "GraphViewer.processElements(); };"
+		return "window.onDrawioViewerLoad = function() {" + setCachedUrls
+				+ "mxStencilRegistry.parseStencilSets(" + result.toString()
+				+ ");" + js + "GraphViewer.processElements(); };"
 				+ "var t = document.getElementsByTagName('script');"
 				+ "if (t != null && t.length > 0) {"
 				+ "var script = document.createElement('script');"

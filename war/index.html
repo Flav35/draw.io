@@ -13,10 +13,9 @@
 		circuit and social network diagrams.">
 	<meta itemprop="image" content="https://lh4.googleusercontent.com/-cLKEldMbT_E/Tx8qXDuw6eI/AAAAAAAAAAs/Ke0pnlk8Gpg/w500-h344-k/BPMN%2Bdiagram%2Brc2f.png">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<meta name="msapplication-config" content="images/browserconfig.xml">
     <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="canonical" href="https://www.draw.io">
+	<meta name="theme-color" content="#d89000">
     <script type="text/javascript">
 		/**
 		 * URL Parameters and protocol description are here:
@@ -29,10 +28,8 @@
 		 * - test=1: For developers only
 		 * - drawdev=1: For developers only
 		 * - export=URL for export: For developers only
-		 * - pages=1: For developers only
-		 * - page=n: For developers only
 		 * - ignoremime=1: For developers only (see DriveClient.js). Use Cmd-S to override mime.
-		 * - createindex=1: For depelopers only (see etc/build/README)
+		 * - createindex=1: For developers only (see etc/build/README)
 		 * - filesupport=0: For developers only (see Editor.js in core)
 		 * - savesidebar=1: For developers only (see Sidebar.js)
 		 * - pages=1: For developers only (see Pages.js)
@@ -64,51 +61,90 @@
 			(function()
 			{
 				var proto = window.location.protocol;
-				var host = window.location.host;
-	
-				// Redirects apex and rt to www
-				if (host === 'draw.io' || host === 'rt.draw.io')
-				{
-					host = 'www.draw.io';
-				}
 				
-				
-				var href = proto + '//' + host + window.location.href.substring(
-						window.location.protocol.length +
-						window.location.host.length + 2);
-	
-				// Redirects if href changes
-				if (href != window.location.href)
+				// Electron protocol is file:
+				if (proto != 'file:')
 				{
-					window.location.href = href;
+					var host = window.location.host;
+		
+					// Redirects apex and rt to www
+					if (host === 'draw.io' || host === 'rt.draw.io')
+					{
+						host = 'www.draw.io';
+					}
+					
+					// Redirects to SSL/non-SSL
+					if (urlParams['demo'] != '1')
+					{
+						var ssl = (urlParams['https'] != null) ? urlParams['https'] == '1' :
+							navigator.userAgent.indexOf('MSIE') < 0 || document.documentMode >= 9;
+						
+						if (ssl && proto != 'https:')
+						{
+							proto = 'https:';
+						}
+						else if (!ssl && proto != 'http:')
+						{
+							proto = 'http:';
+						}
+					}
+					
+					var href = proto + '//' + host + window.location.href.substring(
+							window.location.protocol.length +
+							window.location.host.length + 2);
+		
+					// Redirects if href changes
+					if (href != window.location.href)
+					{
+						window.location.href = href;
+					}
 				}
 			})();
 		}
+		
+		/**
+		 * Adds meta tags with application name (depends on offline URL parameter)
+		 */
+		(function()
+		{
+			function addMeta(name, content)
+			{
+				try
+				{
+					var s = document.createElement('meta');
+					s.setAttribute('name', name);
+					s.setAttribute('content', content);
+					
+				  	var t = document.getElementsByTagName('meta')[0];
+				  	t.parentNode.insertBefore(s, t);
+				}
+				catch (e)
+				{
+					// ignore
+				}
+			};
+			
+			var name = 'draw.io';
+
+			if (urlParams['offline'] === '1')
+			{
+				name += ' app';
+			}
+			
+			addMeta('apple-mobile-web-app-title', name);
+			addMeta('application-name', name);
+		})();
+
 	</script>
-    <link rel="alternate" type="application/rss+xml" title="RSS Feed for draw.io" href="http://blog.draw.io/feed/">
     <link rel="chrome-webstore-item" href="https://chrome.google.com/webstore/detail/plgmlhohecdddhbmmkncjdmlhcmaachm">
-	<link rel="apple-touch-icon" sizes="57x57" href="images/apple-touch-icon-57x57.png">
-	<link rel="apple-touch-icon" sizes="60x60" href="images/apple-touch-icon-60x60.png">
-	<link rel="apple-touch-icon" sizes="72x72" href="images/apple-touch-icon-72x72.png">
-	<link rel="apple-touch-icon" sizes="76x76" href="images/apple-touch-icon-76x76.png">
-	<link rel="apple-touch-icon" sizes="114x114" href="images/apple-touch-icon-114x114.png">
-	<link rel="apple-touch-icon" sizes="120x120" href="images/apple-touch-icon-120x120.png">
-	<link rel="apple-touch-icon" sizes="144x144" href="images/apple-touch-icon-144x144.png">
-	<link rel="apple-touch-icon" sizes="152x152" href="images/apple-touch-icon-152x152.png">
-	<link rel="apple-touch-icon" sizes="180x180" href="images/apple-touch-icon-180x180.png">
-	<link rel="icon" type="image/png" href="images/favicon-32x32.png" sizes="32x32">
-	<link rel="icon" type="image/png" href="images/favicon-194x194.png" sizes="194x194">
-	<link rel="icon" type="image/png" href="images/favicon-96x96.png" sizes="96x96">
-	<link rel="icon" type="image/png" href="images/android-chrome-192x192.png" sizes="192x192">
-	<link rel="icon" type="image/png" href="images/favicon-16x16.png" sizes="16x16">
-	<link rel="manifest" href="images/manifest.json">
-	<link rel="mask-icon" href="images/safari-pinned-tab.svg" color="#f18808">
-	<meta name="msapplication-TileColor" content="#da532c">
-	<meta name="msapplication-TileImage" content="images/mstile-144x144.png">
-	<meta name="msapplication-config" content="images/browserconfig.xml">
-	<meta name="theme-color" content="#f18808">
-    <link rel="apple-touch-startup-image" href="images/logo-flat.png">
+	<link rel="apple-touch-icon" sizes="180x180" href="images/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="images/favicon-16x16.png">
+	<link rel="mask-icon" href="images/safari-pinned-tab.svg" color="#d89000">
     <link rel="stylesheet" type="text/css" href="styles/grapheditor.css">
+    <link rel="canonical" href="https://www.draw.io">
+	<link rel="manifest" href="images/manifest.json">
+	<link rel="shortcut icon" href="favicon.ico">
 	<style type="text/css">
 		body { overflow:hidden; }
 		.geSidebarContainer .geTitle { color:#505050; }
@@ -271,6 +307,15 @@
 		{
 			// Used to request grapheditor/mxgraph sources in dev mode
 			var mxDevUrl = document.location.protocol + '//devhost.jgraph.com/mxgraph2';
+			
+			if (document.location.protocol == 'file:')
+			{
+				mxDevUrl = '../../mxgraph2';
+				
+				// Forces includes for dev environment in node.js
+				mxForceIncludes = true;
+			}
+
 			var geBasePath = mxDevUrl + '/javascript/examples/grapheditor/www/js';
 			var mxBasePath = mxDevUrl + '/javascript/src';
 			
@@ -296,6 +341,13 @@
 			mxscript('js/app.min.js');
 		}
 
+		if (window && window.process && window.process.type)
+		{
+			// Electron
+			mxscript('js/diagramly/ElectronApp.js');
+			mxscript('js/diagramly/Extensions.js');
+		}
+		
 		// Adds basic error handling
 		window.onerror = function()
 		{
@@ -318,14 +370,14 @@
 		</p>
 		<h2 id="geStatus">Loading...</h2>
 		<p>
-			Please ensure JavaScript is enabled
+			Please ensure JavaScript is enabled.
 		</p>
 	</div>
 </div>
-<div id="geFooter" style="visibility:hidden;overflow:hidden;margin-right:170px;">
+<div id="geFooter" style="visibility:hidden;overflow:hidden;margin-right:170px;height:100%;">
 	<div class="geSocialFooter" style="position:absolute;right:32px;white-space:nowrap;">
-    	<a href="https://plus.google.com/u/0/+DrawIo1/posts" title="draw.io on Google+" target="_blank">
-    		<img border="0" width="24" height="24" src="images/glyphicons_google.png" alt="draw.io on Google+"/>
+    	<a href="https://www.youtube.com/channel/UCiTtRN9b8P4CoSfpkfgEJHA" title="draw.io on Youtube" target="_blank">
+    		<img border="0" width="24" height="24" src="images/glyphicons_youtube.png" alt="draw.io on Youtube"/>
     	</a>
     	&nbsp;
     	<a href="https://www.facebook.com/pages/drawio/161015263923018" title="draw.io on Facebook" target="_blank">
@@ -336,23 +388,22 @@
     		<img border="0" width="24" height="24" src="images/glyphicons_twitter.png" alt="draw.io on Twitter"/>
     	</a>
     	&nbsp;
-    	<a href="https://github.com/jgraph/draw.io" title="draw.io on GitHub" target="_blank">
+    	<a href="https://github.com/jgraph/drawio" title="draw.io on GitHub" target="_blank">
     		<img border="0" width="24" height="24" src="images/glyphicons_github.png" alt="draw.io on GitHub"/>
     	</a>
 	</div>
-	<table align="center">
+	<table align="center" height="100%">
 		<tr>
-			<td id="geFooterItem2">
-				<a title="HTML5 JavaScript Diagramming" target="_blank" href="https://github.com/jgraph/draw.io">
-					<img border="0" align="absmiddle" style="margin-top:-4px;padding-right:10px;"
-						src="images/glyphicons_star.png"/>Source code now on Github
-				</a>
+			<td id="geFooterItem2" align="center" style="width:246px;">
+				<a title="Quick Start Video" href="https://www.youtube.com/watch?v=Z0D96ZikMkc" target="_blank">
+					<img border="0" align="absmiddle" style="margin-top:-2px;padding-right:8px;"
+						width="26" height="26" src="images/youtube.png"/>Quick Start Video</a>
 			</td>
-			<td id="geFooterItem1">
-				<a title="#1 Rated Confluence Add-on" target="_blank"
+			<td id="geFooterItem1" align="center" style="width:282px;">
+				<a id="geFooterLink1" title="#1 Rated Confluence Add-on" target="_blank"
 					href="https://marketplace.atlassian.com/plugins/com.mxgraph.confluence.plugins.diagramly/server/overview">
-					<img border="0" width="27" height="24" align="absmiddle" style="padding-right:16px;"
-						src="images/logo-confluence.png"/>#1 Rated Confluence Add-on
+					<img border="0" width="24" height="24" align="absmiddle" style="padding-right:10px;"
+						src="images/logo-confluence.png"/>#1 Rated Confluence App
 				</a>
 			</td>
 		</tr>
